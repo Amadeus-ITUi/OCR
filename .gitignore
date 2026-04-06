@@ -28,3 +28,9 @@ Thumbs.db
 # Others
 *.swp
 *.swo
+
+# Dataset (keep empty folder structure only)
+dataset/**
+!dataset/**/
+!dataset/.gitkeep
+!dataset/**/.gitkeep
