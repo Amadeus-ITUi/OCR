@@ -60,6 +60,8 @@ dataset/*.png
 
 建议单独创建虚拟环境，并固定 `numpy<2`，避免目前很多 OCR 相关包与 `numpy 2.x` 的兼容问题。
 
+
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
