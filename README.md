@@ -5,7 +5,7 @@
 当前阶段只实现：
 
 - `dataset` 图片作为输入
-- `PaddleOCR` 离线识别题目
+- `Tesseract OCR` 离线识别题目
 - 对识别结果做规则化、表达式求值、答案输出
 - 用标注文件评估识别准确率
 
@@ -48,9 +48,9 @@ dataset/*.png
 
 所以第一阶段没必要先做复杂检测网络，可以直接：
 
-1. 从整张图里裁出白色显示区
+1. 从整张图里裁出公式前景区域
 2. 做轻量二值化和放大
-3. 送给 `PaddleOCR`
+3. 送给 `Tesseract OCR`
 4. 用规则层把 OCR 输出修正为合法算式
 5. 再独立计算答案
 
@@ -69,26 +69,50 @@ pip install -U pip
 pip install -r requirements.txt
 ```
 
-如果你是 CPU 环境，`requirements.txt` 里默认使用 `paddlepaddle`。
-如果你后面换成 CUDA，请按 Paddle 官方说明替换为对应版本。
+除了 Python 依赖，还需要在系统里安装 `tesseract` 可执行程序。
+
+Ubuntu / Debian:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y tesseract-ocr
+```
+
+macOS:
+
+```bash
+brew install tesseract
+```
+
+如果 `tesseract` 不在系统 `PATH` 里，可以在 `OCRConfig.tesseract_cmd` 里手动指定可执行文件路径。
+语言建议使用 Tesseract 的语言码，例如英文应写成 `eng`，不是 `en`。
 
 ## 运行离线识别
 
 识别一个数据集目录：
 
 ```bash
-PYTHONPATH=src python3 scripts/run_offline_pipeline.py \
-  --dataset-dir dataset/num_100_com_4 \
-  --label-file dataset/num_100_com_4/problems_and_answers.txt
+python3 -m robocon_ocr dataset/num_100_com_4
 ```
 
 保存调试图：
 
 ```bash
-PYTHONPATH=src python3 scripts/run_offline_pipeline.py \
-  --dataset-dir dataset/num_100_com_8 \
-  --label-file dataset/num_100_com_8/problems_and_answers.txt \
+python3 -m robocon_ocr dataset/num_100_com_8 \
   --debug-dir debug_outputs
+```
+
+如需手动覆盖标注文件路径：
+
+```bash
+python3 -m robocon_ocr dataset/num_100_com_4 \
+  --label-file dataset/num_100_com_4/problems_and_answers.txt
+```
+
+兼容旧入口：
+
+```bash
+python3 scripts/run_offline_pipeline.py dataset/num_100_com_4
 ```
 
 ## 输出内容
@@ -135,4 +159,3 @@ PYTHONPATH=src python3 scripts/run_offline_pipeline.py \
 - 异常回退
 - 结果缓存
 - 与控制系统联动
-

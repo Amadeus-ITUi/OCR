@@ -440,7 +440,7 @@ def main() -> int:
         if max_depth < min_depth:
             raise ValueError("请保证 1 <= --min-depth <= --max-depth")
 
-        output_dir = Path(args.output_dir).expanduser().resolve()
+        output_dir = Path(args.output_dir).expanduser()
         output_dir.mkdir(parents=True, exist_ok=True)
 
         manifest_entries: list[tuple[str, str, int, int]] = []

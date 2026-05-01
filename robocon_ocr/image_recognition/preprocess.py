@@ -8,18 +8,22 @@ from PIL import Image
 from robocon_ocr.config import PreprocessConfig
 
 
-def crop_display_area(image: Image.Image, config: PreprocessConfig) -> Image.Image:
+def crop_foreground_text(image: Image.Image, config: PreprocessConfig) -> Image.Image:
     gray = np.asarray(image.convert("L"))
-    mask = gray >= config.white_threshold
+    mask = gray <= config.foreground_threshold
     ys, xs = np.where(mask)
 
-    if len(xs) == 0 or len(ys) == 0:
+    if len(xs) < config.min_foreground_pixels or len(ys) < config.min_foreground_pixels:
         return image
 
     x0 = max(0, int(xs.min()) - config.crop_padding)
     y0 = max(0, int(ys.min()) - config.crop_padding)
     x1 = min(image.width, int(xs.max()) + config.crop_padding + 1)
     y1 = min(image.height, int(ys.max()) + config.crop_padding + 1)
+
+    if x1 - x0 < config.min_crop_size or y1 - y0 < config.min_crop_size:
+        return image
+
     return image.crop((x0, y0, x1, y1))
 
 
@@ -29,7 +33,8 @@ def enhance_for_ocr(image: Image.Image, config: PreprocessConfig) -> Image.Image
         (
             int(gray.width * config.scale_factor),
             int(gray.height * config.scale_factor),
-        )
+        ),
+        Image.Resampling.LANCZOS,
     )
     arr = np.asarray(enlarged)
     binary = np.where(arr > config.binary_threshold, 255, 0).astype(np.uint8)
@@ -38,7 +43,7 @@ def enhance_for_ocr(image: Image.Image, config: PreprocessConfig) -> Image.Image
 
 def prepare_for_ocr(image_path: Path, config: PreprocessConfig) -> tuple[Image.Image, Image.Image]:
     original = Image.open(image_path).convert("RGB")
-    cropped = crop_display_area(original, config)
+    cropped = crop_foreground_text(original, config)
     prepared = enhance_for_ocr(cropped, config)
     return cropped, prepared
 
@@ -52,4 +57,3 @@ def save_debug_images(
     debug_dir.mkdir(parents=True, exist_ok=True)
     cropped.save(debug_dir / f"{Path(image_name).stem}_cropped.png")
     prepared.save(debug_dir / f"{Path(image_name).stem}_prepared.png")
-

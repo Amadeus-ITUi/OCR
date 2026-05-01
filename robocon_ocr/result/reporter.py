@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from robocon_ocr.image_recognition.dataset_source import LabelRecord
-from robocon_ocr.image_recognition.paddle_recognizer import OCRResult
+from robocon_ocr.image_recognition.tesseract_recognizer import OCRResult
 from robocon_ocr.result.expression import ParsedExpression, to_expression_only
 
 
@@ -42,4 +42,3 @@ def summarize(records: list[PipelineRecord]) -> dict[str, float | int]:
         "expression_accuracy": expression_correct / len(with_label) if with_label else 0.0,
         "answer_accuracy": answer_correct / len(with_label) if with_label else 0.0,
     }
-

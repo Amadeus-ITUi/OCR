@@ -95,35 +95,35 @@ filename    expression    answer    font_size_px
 ### 生成 20 道题
 
 ```bash
-python3 /home/terrisa/Robocon/OCR/question_generate/generate_expression_image.py \
+python3 -m question_generate.generate_expression_image \
   -n 20 \
-  -o /home/terrisa/Robocon/OCR/question_generate/output_20
+  -o question_generate/output_20
 ```
 
 ### 生成 100 道中等复杂度题目
 
 ```bash
-python3 /home/terrisa/Robocon/OCR/question_generate/generate_expression_image.py \
+python3 -m question_generate.generate_expression_image \
   -n 100 \
-  -o /home/terrisa/Robocon/OCR/question_generate/output_100 \
+  -o question_generate/output_100 \
   --complexity 5
 ```
 
 ### 生成高复杂度题目
 
 ```bash
-python3 /home/terrisa/Robocon/OCR/question_generate/generate_expression_image.py \
+python3 -m question_generate.generate_expression_image \
   -n 100 \
-  -o /home/terrisa/Robocon/OCR/dataset/num_100_com_8 \
+  -o dataset/num_100_com_8 \
   --complexity 8
 ```
 
 ### 指定随机种子，便于复现
 
 ```bash
-python3 /home/terrisa/Robocon/OCR/question_generate/generate_expression_image.py \
+python3 -m question_generate.generate_expression_image \
   -n 30 \
-  -o /home/terrisa/Robocon/OCR/question_generate/output_seed_42 \
+  -o question_generate/output_seed_42 \
   --complexity 6 \
   --seed 42
 ```
@@ -131,9 +131,9 @@ python3 /home/terrisa/Robocon/OCR/question_generate/generate_expression_image.py
 ### 只测试题目生成，不输出图片
 
 ```bash
-python3 /home/terrisa/Robocon/OCR/question_generate/generate_expression_image.py \
+python3 -m question_generate.generate_expression_image \
   -n 20 \
-  -o /home/terrisa/Robocon/OCR/question_generate/output_dry_run \
+  -o question_generate/output_dry_run \
   --complexity 7 \
   --dry-run
 ```

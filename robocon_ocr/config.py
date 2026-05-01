@@ -6,17 +6,20 @@ from pathlib import Path
 
 @dataclass(slots=True)
 class OCRConfig:
-    use_angle_cls: bool = False
-    lang: str = "en"
-    show_log: bool = False
-    det_limit_side_len: int = 1920
-    rec_batch_num: int = 6
-    drop_score: float = 0.1
+    lang: str = "eng"
+    tesseract_cmd: str | None = None
+    oem: int = 3
+    psm: int = 11
+    fallback_psm: tuple[int, ...] = (7,)
+    whitelist: str = "0123456789+-xX*/()=×÷"
+    preserve_interword_spaces: bool = False
 
 
 @dataclass(slots=True)
 class PreprocessConfig:
-    white_threshold: int = 235
+    foreground_threshold: int = 200
+    min_foreground_pixels: int = 32
+    min_crop_size: int = 8
     crop_padding: int = 24
     scale_factor: float = 2.0
     binary_threshold: int = 185
@@ -29,4 +32,3 @@ class PipelineConfig:
     debug_dir: Path | None = None
     ocr: OCRConfig = field(default_factory=OCRConfig)
     preprocess: PreprocessConfig = field(default_factory=PreprocessConfig)
-
