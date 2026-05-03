@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import platform
+import shutil
+import subprocess
+import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
 
+import numpy as np
 from PIL import Image
 
 from robocon_ocr.config import CameraConfig
@@ -39,7 +44,77 @@ class USBCameraCapture:
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, float(self.config.height))
         capture.set(cv2.CAP_PROP_FPS, float(self.config.fps))
         capture.set(cv2.CAP_PROP_FOURCC, float(_build_fourcc(cv2, self.config.pixel_format)))
+        self._apply_camera_controls()
         return cv2, capture
+
+    def _camera_device_path(self) -> str:
+        return f"/dev/video{self.config.device_index}"
+
+    def _warn(self, message: str) -> None:
+        print(f"[camera-init] {message}", file=sys.stderr)
+
+    def _camera_controls_in_order(self) -> list[tuple[str, int]]:
+        controls: list[tuple[str, int]] = []
+        for name in (
+            "white_balance_automatic",
+            "white_balance_temperature",
+            "focus_automatic_continuous",
+            "focus_absolute",
+            "auto_exposure",
+            "exposure_dynamic_framerate",
+            "exposure_time_absolute",
+            "gain",
+            "brightness",
+            "contrast",
+            "saturation",
+            "sharpness",
+            "gamma",
+            "backlight_compensation",
+            "power_line_frequency",
+        ):
+            value = getattr(self.config, name)
+            if value is None:
+                continue
+            controls.append((name, int(value)))
+        return controls
+
+    def _run_v4l2_set_ctrl(self, control_name: str, value: int) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                "v4l2-ctl",
+                "-d",
+                self._camera_device_path(),
+                f"--set-ctrl={control_name}={value}",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    def _apply_camera_controls(self) -> None:
+        if platform.system() != "Linux":
+            self._warn("当前平台不是 Linux，跳过 v4l2 控制项初始化。")
+            return
+
+        if shutil.which("v4l2-ctl") is None:
+            self._warn("系统中未找到 v4l2-ctl，跳过摄像头固定参数初始化。")
+            return
+
+        for control_name, value in self._camera_controls_in_order():
+            result = self._run_v4l2_set_ctrl(control_name, value)
+            if result.returncode == 0:
+                continue
+
+            output = (result.stderr or result.stdout).strip()
+            if "unknown control" in output.lower():
+                self._warn(f"设备不支持控制项 `{control_name}`，已跳过。")
+            elif "invalid argument" in output.lower():
+                self._warn(f"控制项 `{control_name}` 的值 `{value}` 不被当前设备接受：{output}")
+            else:
+                self._warn(f"设置控制项 `{control_name}={value}` 失败：{output or 'unknown error'}")
+
+    def open(self):
+        return self._open_capture()
 
     def capture_frame(self) -> Image.Image:
         cv2, capture = self._open_capture()
@@ -64,7 +139,33 @@ class USBCameraCapture:
         finally:
             capture.release()
 
+    def stream_raw_frames(self) -> Iterator[tuple[int, np.ndarray]]:
+        cv2, capture = self._open_capture()
+        try:
+            frame_index = 0
+            warmup = max(1, self.config.warmup_frames)
+            self._read_raw_frame(capture, discard_frames=warmup)
+
+            while self.config.max_frames is None or frame_index < self.config.max_frames:
+                if self.config.interval_ms > 0 and not self.config.async_latest_frame:
+                    time.sleep(self.config.interval_ms / 1000.0)
+                raw_frame = self._read_raw_frame(capture, discard_frames=1)
+                yield frame_index, raw_frame
+                frame_index += 1
+        finally:
+            capture.release()
+
     def _read_stable_frame(self, cv2_module, capture, discard_frames: int) -> Image.Image:
+        frame = self._read_raw_frame(capture, discard_frames)
+        rgb_frame = cv2_module.cvtColor(frame, cv2_module.COLOR_BGR2RGB)
+        image = Image.fromarray(rgb_frame)
+        if self.config.save_frame is not None:
+            save_path = Path(self.config.save_frame).expanduser()
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            image.save(save_path)
+        return image
+
+    def _read_raw_frame(self, capture, discard_frames: int) -> np.ndarray:
         deadline = time.monotonic() + (self.config.capture_timeout_ms / 1000.0)
         frame = None
         frames_to_read = max(1, discard_frames)
@@ -80,11 +181,4 @@ class USBCameraCapture:
 
         if frame is None or frames_to_read > 0:
             raise RuntimeError("在超时时间内未能从 USB 摄像头读取到稳定画面")
-
-        rgb_frame = cv2_module.cvtColor(frame, cv2_module.COLOR_BGR2RGB)
-        image = Image.fromarray(rgb_frame)
-        if self.config.save_frame is not None:
-            save_path = Path(self.config.save_frame).expanduser()
-            save_path.parent.mkdir(parents=True, exist_ok=True)
-            image.save(save_path)
-        return image
+        return frame

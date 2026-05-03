@@ -30,7 +30,8 @@ src/robocon_ocr/
 
 ```text
 dataset/*.png
-  -> 图片识别层
+  -> 定位白色题板 ROI（优先矩形，回退四边形）
+  -> 透视拉正 + Otsu 二值化
   -> OCR文本规则化
   -> 表达式求值
   -> 输出 expression / answer / confidence
@@ -48,11 +49,13 @@ dataset/*.png
 
 所以第一阶段没必要先做复杂检测网络，可以直接：
 
-1. 从整张图里裁出公式前景区域
-2. 做轻量二值化和放大
-3. 送给 `Tesseract OCR`
-4. 用规则层把 OCR 输出修正为合法算式
-5. 再独立计算答案
+1. 先找大块高对比白色题板区域，长宽比约束为 `16:9`
+2. 如果矩形不稳定，再找 4 个角点构成的四边形题板
+3. 对 ROI 做透视拉正
+4. 在 ROI 内做 Otsu 二值化和放大
+5. 送给 `Tesseract OCR`
+6. 用规则层把 OCR 输出修正为合法算式
+7. 再独立计算答案
 
 这样系统会比“直接信 OCR 原始文本”稳很多。
 
@@ -125,19 +128,21 @@ python3 -m robocon_ocr camera \
 ```
 
 默认只在识别结果发生变化时打印新结果，按 `Ctrl+C` 停止。
-默认摄像头参数是 `device-index=2`、`1280x720`、`30fps`、`MJPG`、`interval-ms=50`。
+实时模式现在是“采集线程持续抓图 + OCR 线程后台处理最新帧”的异步模型。
+默认摄像头参数是 `device-index=2`、`1280x720`、`30fps`、`MJPG`、`interval-ms=0`。
+默认固定参数写在 [robocon_ocr/camera_tuning.py](/home/angela/Robocon/OCR/robocon_ocr/camera_tuning.py) 里，程序启动时会按固定顺序自动尝试应用曝光、白平衡、对焦、增益等控制项。
+白色题板 ROI 检测参数单独写在 [robocon_ocr/roi_tuning.py](/home/angela/Robocon/OCR/robocon_ocr/roi_tuning.py) 里，方便单独调试阈值、面积和比例限制。
 
-如果你想指定识别间隔、限制帧数，或者保存拍摄原图和预处理调试图：
+如果你想限制抓图帧数，或者保存拍摄原图和预处理调试图：
 
 ```bash
 python3 -m robocon_ocr camera \
   --device-index 0 \
   --width 1280 \
   --height 720 \
-  --fps 60 \
-  --pixel-format YUYV \
+  --fps 30 \
+  --pixel-format MJPG \
   --warmup-frames 8 \
-  --interval-ms 100 \
   --max-frames 50 \
   --show-window \
   --save-frame captures/latest_frame.png \
@@ -146,9 +151,16 @@ python3 -m robocon_ocr camera \
 
 打开窗口调试后，会显示：
 
-- 原始摄像头画面，并叠加当前识别结果、答案、置信度、`psm`、耗时和错误信息
-- 裁剪后的公式区域窗口
-- OCR 二值化后的预处理窗口
+- 彩色原图，并叠加 ROI 四边形
+- 灰度原图，并叠加 ROI 四边形
+- 真正送入 OCR 的输入图
+- OCR 结果和调试信息
+
+在彩色原图旁边，还会显示当前 ROI 判定信息，包括：
+
+- 当前阈值
+- 当前最佳候选的面积 / 边缘 / 比例测量值
+- 当前失败原因，方便判断是哪个参数限制了检测
 
 在窗口里按 `q` 或 `Esc` 可以退出实时识别。
 
@@ -156,15 +168,59 @@ python3 -m robocon_ocr camera \
 
 - `--device-index`：USB 设备号，对应常见的 `/dev/video0`、`/dev/video1`
 - `--fps`：请求摄像头输出帧率
-- `--pixel-format`：请求视频格式，例如 `MJPG`、`YUYV`
+- `--pixel-format`：请求视频格式，当前推荐固定为 `MJPG`
 - `--width` / `--height`：请求分辨率
 - `--warmup-frames`：丢弃前几帧，等曝光稳定后再识别
-- `--interval-ms`：两次 OCR 之间的等待时间，适合降低 CPU 占用
+- `--interval-ms`：保留的兼容参数，异步最新帧模式下默认不主动节流
 - `--max-frames`：最多识别多少帧后自动退出，便于调试
 - `--print-all`：即使识别结果没变也持续打印每次 OCR 输出
 - `--show-window`：用 `cv2` 打开实时调试窗口
 - `--window-scale`：调试窗口缩放比例，适合高分辨率画面
 - `--save-frame`：保存抓拍到的原始 RGB 图片
+
+## 摄像头固定参数调优
+
+推荐直接编辑 [robocon_ocr/camera_tuning.py](/home/angela/Robocon/OCR/robocon_ocr/camera_tuning.py)。
+
+这份文件专门服务于“电子显示屏中的白色题板 + 黑色题目 OCR”场景，包含：
+
+- 固定采集参数：`device_index`、`width`、`height`、`fps`、`pixel_format`
+- 固定控制参数：曝光、白平衡、对焦、增益、对比度、锐度等
+- 每个参数的中文注释
+- 每个参数的调试建议和常见失效现象
+
+推荐调参顺序：
+
+1. 先调 `exposure_time_absolute`
+2. 再调 `focus_absolute`
+3. 再调 `contrast`
+4. 最后才考虑 `gain` 和 `brightness`
+
+如果某个控制项当前设备不支持，程序会在初始化阶段打印 `[camera-init]` 警告，但不会中断取流。
+
+## ROI 参数调优
+
+推荐直接编辑 [robocon_ocr/roi_tuning.py](/home/angela/Robocon/OCR/robocon_ocr/roi_tuning.py)。
+
+这份文件专门维护白色题板 ROI 检测参数，包含：
+
+- `white_threshold`
+- `edge_threshold`
+- `min_roi_area_ratio`
+- `rectangle_ratio_tolerance`
+- `quadrilateral_ratio_tolerance`
+- `target_aspect_ratio`
+- `roi_padding`
+- `perspective_width`
+- `perspective_height`
+- `scale_factor`
+
+推荐调参顺序：
+
+1. 先调 `min_roi_area_ratio`
+2. 再调 `edge_threshold`
+3. 再调 `white_threshold`
+4. 最后调 `rectangle_ratio_tolerance` 和 `quadrilateral_ratio_tolerance`
 
 ## 输出内容
 

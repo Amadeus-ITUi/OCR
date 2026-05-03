@@ -13,6 +13,8 @@ class PipelineRecord:
     ocr: OCRResult
     parsed: ParsedExpression
     label: LabelRecord | None
+    roi_found: bool = False
+    roi_quad: tuple[tuple[int, int], tuple[int, int], tuple[int, int], tuple[int, int]] | None = None
 
     @property
     def expression_match(self) -> bool | None:

@@ -6,10 +6,12 @@ from robocon_ocr.config import PipelineConfig
 from robocon_ocr.image_recognition.dataset_source import list_images, load_labels
 from robocon_ocr.image_recognition.tesseract_recognizer import TesseractMathRecognizer
 from robocon_ocr.image_recognition.preprocess import (
+    PreprocessResult,
     prepare_for_ocr,
     prepare_image_for_ocr,
     save_debug_images,
 )
+from robocon_ocr.image_recognition.tesseract_recognizer import OCRResult
 from robocon_ocr.result.expression import ParsedExpression, parse_expression
 from robocon_ocr.result.reporter import PipelineRecord
 
@@ -37,6 +39,41 @@ def _select_best_result(candidates) -> tuple:
     return best_choice[0], best_choice[1]
 
 
+def _empty_record_result() -> tuple[OCRResult, ParsedExpression]:
+    return (
+        OCRResult(
+            raw_text="",
+            confidence=0.0,
+            lines=[],
+            psm=None,
+            error="roi not found",
+        ),
+        ParsedExpression("", "", None, False, "roi not found"),
+    )
+
+
+def _record_from_preprocess(
+    image_name: str,
+    preprocess_result: PreprocessResult,
+    recognizer: TesseractMathRecognizer,
+    label,
+) -> PipelineRecord:
+    if not preprocess_result.roi_found:
+        ocr_result, parsed = _empty_record_result()
+    else:
+        ocr_candidates = recognizer.recognize_candidates(preprocess_result.prepared)
+        ocr_result, parsed = _select_best_result(ocr_candidates)
+
+    return PipelineRecord(
+        image_name=image_name,
+        ocr=ocr_result,
+        parsed=parsed,
+        label=label,
+        roi_found=preprocess_result.roi_found,
+        roi_quad=preprocess_result.roi_quad,
+    )
+
+
 def run_pipeline(config: PipelineConfig) -> list[PipelineRecord]:
     image_paths = list_images(config.dataset_dir)
     labels = load_labels(config.label_file) if config.label_file else {}
@@ -44,17 +81,20 @@ def run_pipeline(config: PipelineConfig) -> list[PipelineRecord]:
     records: list[PipelineRecord] = []
 
     for image_path in image_paths:
-        cropped, prepared = prepare_for_ocr(image_path, config.preprocess)
+        preprocess_result = prepare_for_ocr(image_path, config.preprocess)
         if config.debug_dir is not None:
-            save_debug_images(image_path.name, cropped, prepared, config.debug_dir)
-
-        ocr_candidates = recognizer.recognize_candidates(prepared)
-        ocr_result, parsed = _select_best_result(ocr_candidates)
+            save_debug_images(
+                image_path.name,
+                preprocess_result.cropped,
+                preprocess_result.prepared,
+                config.debug_dir,
+                rectified=preprocess_result.rectified,
+            )
         records.append(
-            PipelineRecord(
+            _record_from_preprocess(
                 image_name=image_path.name,
-                ocr=ocr_result,
-                parsed=parsed,
+                preprocess_result=preprocess_result,
+                recognizer=recognizer,
                 label=labels.get(image_path.name),
             )
         )
@@ -68,15 +108,19 @@ def run_image_pipeline(
     config: PipelineConfig,
 ) -> PipelineRecord:
     recognizer = TesseractMathRecognizer(config.ocr)
-    cropped, prepared = prepare_image_for_ocr(image.convert("RGB"), config.preprocess)
+    preprocess_result = prepare_image_for_ocr(image.convert("RGB"), config.preprocess)
     if config.debug_dir is not None:
-        save_debug_images(image_name, cropped, prepared, config.debug_dir)
+        save_debug_images(
+            image_name,
+            preprocess_result.cropped,
+            preprocess_result.prepared,
+            config.debug_dir,
+            rectified=preprocess_result.rectified,
+        )
 
-    ocr_candidates = recognizer.recognize_candidates(prepared)
-    ocr_result, parsed = _select_best_result(ocr_candidates)
-    return PipelineRecord(
+    return _record_from_preprocess(
         image_name=image_name,
-        ocr=ocr_result,
-        parsed=parsed,
+        preprocess_result=preprocess_result,
+        recognizer=recognizer,
         label=None,
     )
