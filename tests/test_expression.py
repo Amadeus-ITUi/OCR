@@ -25,3 +25,17 @@ def test_invalid_non_integer_division():
     parsed = parse_expression("5 ÷ 2 =")
     assert not parsed.is_valid
     assert parsed.answer is None
+
+
+def test_repair_duplicate_operator_sequence():
+    parsed = parse_expression("7 + 11 × × 14 =")
+    assert parsed.is_valid
+    assert parsed.expression == "7+11×14"
+    assert parsed.answer == 161
+
+
+def test_repair_unmatched_parentheses():
+    parsed = parse_expression("(6 + 3 + (4 × 3)) × 8) - (4 + 4) + 8 + 18) =")
+    assert parsed.is_valid
+    assert parsed.expression == "(6+3+(4×3))×8-(4+4)+8+18"
+    assert parsed.answer == 186

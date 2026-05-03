@@ -26,6 +26,21 @@ class PreprocessConfig:
 
 
 @dataclass(slots=True)
+class CameraConfig:
+    device_index: int = 2
+    width: int = 1280
+    height: int = 720
+    fps: float = 30.0
+    pixel_format: str = "MJPG"
+    warmup_frames: int = 5
+    capture_timeout_ms: int = 3000
+    interval_ms: int = 50
+    max_frames: int | None = None
+    emit_only_changes: bool = True
+    save_frame: Path | None = None
+
+
+@dataclass(slots=True)
 class PipelineConfig:
     dataset_dir: Path
     label_file: Path | None = None

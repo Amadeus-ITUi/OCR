@@ -41,11 +41,18 @@ def enhance_for_ocr(image: Image.Image, config: PreprocessConfig) -> Image.Image
     return Image.fromarray(binary, mode="L")
 
 
-def prepare_for_ocr(image_path: Path, config: PreprocessConfig) -> tuple[Image.Image, Image.Image]:
-    original = Image.open(image_path).convert("RGB")
+def prepare_image_for_ocr(
+    original: Image.Image,
+    config: PreprocessConfig,
+) -> tuple[Image.Image, Image.Image]:
     cropped = crop_foreground_text(original, config)
     prepared = enhance_for_ocr(cropped, config)
     return cropped, prepared
+
+
+def prepare_for_ocr(image_path: Path, config: PreprocessConfig) -> tuple[Image.Image, Image.Image]:
+    original = Image.open(image_path).convert("RGB")
+    return prepare_image_for_ocr(original, config)
 
 
 def save_debug_images(

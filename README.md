@@ -6,12 +6,12 @@
 
 - `dataset` 图片作为输入
 - `Tesseract OCR` 离线识别题目
+- `USB` 摄像头实时取流并持续送入 OCR
 - 对识别结果做规则化、表达式求值、答案输出
 - 用标注文件评估识别准确率
 
 暂未实现：
 
-- 视觉采集层真实摄像头接入
 - 视觉处理层复杂透视矫正、去反光、去模糊
 
 ## 项目分层
@@ -114,6 +114,57 @@ python3 -m robocon_ocr dataset/num_100_com_4 \
 ```bash
 python3 scripts/run_offline_pipeline.py dataset/num_100_com_4
 ```
+
+## 运行 USB 摄像头实时识别
+
+持续取流并实时输出识别结果：
+
+```bash
+python3 -m robocon_ocr camera \
+  --show-window
+```
+
+默认只在识别结果发生变化时打印新结果，按 `Ctrl+C` 停止。
+默认摄像头参数是 `device-index=2`、`1280x720`、`30fps`、`MJPG`、`interval-ms=50`。
+
+如果你想指定识别间隔、限制帧数，或者保存拍摄原图和预处理调试图：
+
+```bash
+python3 -m robocon_ocr camera \
+  --device-index 0 \
+  --width 1280 \
+  --height 720 \
+  --fps 60 \
+  --pixel-format YUYV \
+  --warmup-frames 8 \
+  --interval-ms 100 \
+  --max-frames 50 \
+  --show-window \
+  --save-frame captures/latest_frame.png \
+  --debug-dir debug_outputs
+```
+
+打开窗口调试后，会显示：
+
+- 原始摄像头画面，并叠加当前识别结果、答案、置信度、`psm`、耗时和错误信息
+- 裁剪后的公式区域窗口
+- OCR 二值化后的预处理窗口
+
+在窗口里按 `q` 或 `Esc` 可以退出实时识别。
+
+支持的关键参数：
+
+- `--device-index`：USB 设备号，对应常见的 `/dev/video0`、`/dev/video1`
+- `--fps`：请求摄像头输出帧率
+- `--pixel-format`：请求视频格式，例如 `MJPG`、`YUYV`
+- `--width` / `--height`：请求分辨率
+- `--warmup-frames`：丢弃前几帧，等曝光稳定后再识别
+- `--interval-ms`：两次 OCR 之间的等待时间，适合降低 CPU 占用
+- `--max-frames`：最多识别多少帧后自动退出，便于调试
+- `--print-all`：即使识别结果没变也持续打印每次 OCR 输出
+- `--show-window`：用 `cv2` 打开实时调试窗口
+- `--window-scale`：调试窗口缩放比例，适合高分辨率画面
+- `--save-frame`：保存抓拍到的原始 RGB 图片
 
 ## 输出内容
 

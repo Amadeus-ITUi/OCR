@@ -39,9 +39,9 @@ class TesseractMathRecognizer:
             self._engine = self._build_engine()
         return self._engine
 
-    def recognize(self, image: Image.Image) -> OCRResult:
+    def recognize_candidates(self, image: Image.Image) -> list[OCRResult]:
         lang = self._resolve_lang()
-        best_result: OCRResult | None = None
+        results: list[OCRResult] = []
 
         for psm in self._psm_candidates():
             config = self._build_tesseract_config(psm)
@@ -58,11 +58,17 @@ class TesseractMathRecognizer:
                     "或在 OCRConfig.tesseract_cmd 中指定其路径。"
                 ) from exc
 
-            result = self._result_from_data(data, psm)
+            results.append(self._result_from_data(data, psm))
+
+        return results
+
+    def recognize(self, image: Image.Image) -> OCRResult:
+        results = self.recognize_candidates(image)
+        best_result: OCRResult | None = None
+
+        for result in results:
             if best_result is None or self._is_better_result(result, best_result):
                 best_result = result
-            if result.raw_text:
-                return result
 
         return best_result or OCRResult(
             raw_text="",

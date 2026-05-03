@@ -30,6 +30,12 @@ class ParsedExpression:
     error: str | None = None
 
 
+@dataclass(slots=True)
+class RepairCandidate:
+    expression: str
+    cost: int
+
+
 def normalize_ocr_text(text: str) -> str:
     normalized = text.strip()
     for src, dst in SYMBOL_REPLACEMENTS.items():
@@ -61,6 +67,126 @@ def tokenize(expression: str) -> list[str]:
     if number:
         tokens.append("".join(number))
     return tokens
+
+
+def _try_parse(expression: str) -> tuple[int | None, str | None]:
+    try:
+        tokens = tokenize(expression)
+        return ExpressionParser(tokens).parse(), None
+    except ValueError as exc:
+        return None, str(exc)
+
+
+def _collapse_duplicate_operators(expression: str) -> RepairCandidate | None:
+    operators = {"+", "-", "×", "÷"}
+    chars: list[str] = []
+    cost = 0
+    changed = False
+
+    for ch in expression:
+        if chars and ch in operators and chars[-1] == ch:
+            changed = True
+            cost += 1
+            continue
+        chars.append(ch)
+
+    if not changed:
+        return None
+    return RepairCandidate("".join(chars), cost)
+
+
+def _replace_internal_equals(expression: str) -> list[RepairCandidate]:
+    candidates: list[RepairCandidate] = []
+    end = len(expression) - 1 if expression.endswith("=") else len(expression)
+    for index, ch in enumerate(expression[:end]):
+        if ch != "=":
+            continue
+        for replacement in ("÷", "×"):
+            candidates.append(
+                RepairCandidate(
+                    expression[:index] + replacement + expression[index + 1 :],
+                    1,
+                )
+            )
+    return candidates
+
+
+def _sanitize_parentheses(expression: str) -> RepairCandidate | None:
+    chars: list[str] = []
+    balance = 0
+    removed = 0
+
+    for ch in expression:
+        if ch == "(":
+            balance += 1
+            chars.append(ch)
+            continue
+        if ch == ")":
+            if balance == 0:
+                removed += 1
+                continue
+            balance -= 1
+            chars.append(ch)
+            continue
+        chars.append(ch)
+
+    if removed == 0 and balance == 0:
+        return None
+    return RepairCandidate("".join(chars) + (")" * balance), removed + balance)
+
+
+def _repair_expression(expression: str) -> ParsedExpression | None:
+    pending = [RepairCandidate(expression, 0)]
+    seen: dict[str, int] = {expression: 0}
+    valid: list[tuple[int, int, ParsedExpression]] = []
+
+    while pending:
+        current = pending.pop(0)
+        if current.cost > 2:
+            continue
+
+        value, error = _try_parse(current.expression)
+        if error is None:
+            valid.append(
+                (
+                    current.cost,
+                    -len(current.expression),
+                    ParsedExpression(
+                        normalized_text=current.expression,
+                        expression=current.expression,
+                        answer=value,
+                        is_valid=True,
+                    ),
+                )
+            )
+            continue
+
+        derived: list[RepairCandidate] = []
+        duplicate = _collapse_duplicate_operators(current.expression)
+        if duplicate is not None:
+            derived.append(RepairCandidate(duplicate.expression, current.cost + duplicate.cost))
+        parenthesized = _sanitize_parentheses(current.expression)
+        if parenthesized is not None:
+            derived.append(
+                RepairCandidate(parenthesized.expression, current.cost + parenthesized.cost)
+            )
+        for candidate in _replace_internal_equals(current.expression):
+            derived.append(RepairCandidate(candidate.expression, current.cost + candidate.cost))
+
+        for candidate in derived:
+            if candidate.cost > 2:
+                continue
+            previous_cost = seen.get(candidate.expression)
+            if previous_cost is not None and previous_cost <= candidate.cost:
+                continue
+            seen[candidate.expression] = candidate.cost
+            pending.append(candidate)
+
+    if not valid:
+        return None
+
+    valid.sort(key=lambda item: (item[0], item[1]))
+    return valid[0][2]
 
 
 class ExpressionParser:
@@ -138,16 +264,18 @@ def parse_expression(text: str) -> ParsedExpression:
             error="empty expression",
         )
 
-    try:
-        tokens = tokenize(expression)
-        answer = ExpressionParser(tokens).parse()
-    except ValueError as exc:
+    answer, error = _try_parse(expression)
+    if error is not None:
+        repaired = _repair_expression(expression)
+        if repaired is not None:
+            repaired.normalized_text = normalized
+            return repaired
         return ParsedExpression(
             normalized_text=normalized,
             expression=expression,
             answer=None,
             is_valid=False,
-            error=str(exc),
+            error=error,
         )
 
     return ParsedExpression(
@@ -156,4 +284,3 @@ def parse_expression(text: str) -> ParsedExpression:
         answer=answer,
         is_valid=True,
     )
-
