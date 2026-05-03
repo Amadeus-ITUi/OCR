@@ -8,13 +8,10 @@ from robocon_ocr.roi_tuning import DEFAULT_ROI_TUNING_VALUES
 
 @dataclass(slots=True)
 class OCRConfig:
-    lang: str = "eng"
-    tesseract_cmd: str | None = None
-    oem: int = 3
-    psm: int = 11
-    fallback_psm: tuple[int, ...] = (7,)
-    whitelist: str = "0123456789+-xX*/()=×÷"
-    preserve_interword_spaces: bool = False
+    device: str = "cpu"
+    model_path: str | None = None
+    warmup: bool = True
+    strict_charset: bool = True
 
 
 @dataclass(slots=True)

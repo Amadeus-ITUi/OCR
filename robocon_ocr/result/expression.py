@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 
 ALLOWED_CHARS = set("0123456789+-×÷()= ")
@@ -18,6 +19,30 @@ SYMBOL_REPLACEMENTS = {
     "）": ")",
     "[": "(",
     "]": ")",
+}
+LATEX_REPLACEMENTS = {
+    r"\times": "×",
+    r"\cdot": "×",
+    r"\div": "÷",
+    r"\left(": "(",
+    r"\right)": ")",
+    "[": "(",
+    "]": ")",
+    "（": "(",
+    "）": ")",
+}
+ARITHMETIC_CHARS_NO_SPACE = set("0123456789+-×÷()=")
+UNSUPPORTED_LATEX_COMMANDS = {
+    "frac",
+    "sqrt",
+    "sum",
+    "int",
+    "prod",
+    "lim",
+    "sin",
+    "cos",
+    "tan",
+    "log",
 }
 
 
@@ -38,15 +63,58 @@ class RepairCandidate:
 
 def normalize_ocr_text(text: str) -> str:
     normalized = text.strip()
+    normalized = normalized.replace("$", "")
+    normalized = normalized.replace("\n", "")
+    normalized = normalized.replace("\r", "")
+    for src, dst in LATEX_REPLACEMENTS.items():
+        normalized = normalized.replace(src, dst)
+    normalized = re.sub(r"\\[a-zA-Z]+\*?", " ", normalized)
+    normalized = re.sub(r"[{}&,_^]", " ", normalized)
     for src, dst in SYMBOL_REPLACEMENTS.items():
         normalized = normalized.replace(src, dst)
-    normalized = "".join(ch for ch in normalized if ch in ALLOWED_CHARS)
-    normalized = " ".join(normalized.split())
+    normalized = re.sub(r"\s+", "", normalized)
+    extracted = _extract_arithmetic_candidate(normalized)
+    if extracted is not None:
+        return extracted
     return normalized
+
+
+def _extract_arithmetic_candidate(text: str) -> str | None:
+    candidates = re.findall(r"[0-9+\-×÷()=]+", text)
+    if not candidates:
+        return None
+
+    best: str | None = None
+    best_score = (-1, -1, -1)
+    for candidate in candidates:
+        digit_count = sum(ch.isdigit() for ch in candidate)
+        operator_count = sum(ch in "+-×÷" for ch in candidate)
+        if digit_count < 2 or operator_count < 1:
+            continue
+        score = (len(candidate), digit_count, operator_count)
+        if score > best_score:
+            best = candidate
+            best_score = score
+    return best
+
+
+def validate_ocr_text(text: str) -> str | None:
+    if not text:
+        return None
+    invalid_chars = [ch for ch in text if ch not in ALLOWED_CHARS]
+    if invalid_chars:
+        return "unsupported symbol outside arithmetic charset"
+    return None
+
+
+def contains_unsupported_latex(text: str) -> bool:
+    commands = re.findall(r"\\([a-zA-Z]+)\*?", text)
+    return any(command in UNSUPPORTED_LATEX_COMMANDS for command in commands)
 
 
 def to_expression_only(text: str) -> str:
     cleaned = normalize_ocr_text(text)
+    cleaned = "".join(ch for ch in cleaned if ch in ALLOWED_CHARS)
     cleaned = cleaned.replace(" ", "")
     if "=" in cleaned:
         cleaned = cleaned.split("=", 1)[0]
@@ -252,7 +320,24 @@ class ExpressionParser:
 
 
 def parse_expression(text: str) -> ParsedExpression:
+    if contains_unsupported_latex(text):
+        return ParsedExpression(
+            normalized_text=text.strip(),
+            expression="",
+            answer=None,
+            is_valid=False,
+            error="unsupported symbol outside arithmetic charset",
+        )
     normalized = normalize_ocr_text(text)
+    validation_error = validate_ocr_text(normalized)
+    if validation_error is not None:
+        return ParsedExpression(
+            normalized_text=normalized,
+            expression="",
+            answer=None,
+            is_valid=False,
+            error=validation_error,
+        )
     expression = to_expression_only(normalized)
 
     if not expression:

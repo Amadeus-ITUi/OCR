@@ -5,7 +5,7 @@
 当前阶段只实现：
 
 - `dataset` 图片作为输入
-- `Tesseract OCR` 离线识别题目
+- `pix2tex` 离线识别题目
 - `USB` 摄像头实时取流并持续送入 OCR
 - 对识别结果做规则化、表达式求值、答案输出
 - 用标注文件评估识别准确率
@@ -53,8 +53,8 @@ dataset/*.png
 2. 如果矩形不稳定，再找 4 个角点构成的四边形题板
 3. 对 ROI 做透视拉正
 4. 在 ROI 内做 Otsu 二值化和放大
-5. 送给 `Tesseract OCR`
-6. 用规则层把 OCR 输出修正为合法算式
+5. 送给 `pix2tex`
+6. 用规则层把 OCR 输出收敛为 `= ( ) 0-9 + - × ÷`
 7. 再独立计算答案
 
 这样系统会比“直接信 OCR 原始文本”稳很多。
@@ -62,6 +62,8 @@ dataset/*.png
 ## 安装建议
 
 建议单独创建虚拟环境，并固定 `numpy<2`，避免目前很多 OCR 相关包与 `numpy 2.x` 的兼容问题。
+同时建议优先使用 `Python 3.11` 或 `Python 3.12`。
+当前一些 `pix2tex` 相关下游依赖在 `Python 3.14` 上还不稳定，容易退回源码编译。
 
 
 
@@ -72,23 +74,9 @@ pip install -U pip
 pip install -r requirements.txt
 ```
 
-除了 Python 依赖，还需要在系统里安装 `tesseract` 可执行程序。
-
-Ubuntu / Debian:
-
-```bash
-sudo apt-get update
-sudo apt-get install -y tesseract-ocr
-```
-
-macOS:
-
-```bash
-brew install tesseract
-```
-
-如果 `tesseract` 不在系统 `PATH` 里，可以在 `OCRConfig.tesseract_cmd` 里手动指定可执行文件路径。
-语言建议使用 Tesseract 的语言码，例如英文应写成 `eng`，不是 `en`。
+`pix2tex` 依赖 `torch`，首次运行时还可能自动下载模型权重，所以第一次启动会比后续慢一些。
+当前默认配置按 `CPU-only Linux` 规划，不需要额外安装 `tesseract` 系统命令。
+如果你使用的是 `Python 3.14`，安装时又看到 `stringzilla`、`gcc-12` 之类的编译错误，优先重新创建 `Python 3.11/3.12` 虚拟环境，而不是继续硬补编译链。
 
 ## 运行离线识别
 
@@ -132,6 +120,7 @@ python3 -m robocon_ocr camera \
 默认摄像头参数是 `device-index=2`、`1280x720`、`30fps`、`MJPG`、`interval-ms=0`。
 默认固定参数写在 [robocon_ocr/camera_tuning.py](/home/angela/Robocon/OCR/robocon_ocr/camera_tuning.py) 里，程序启动时会按固定顺序自动尝试应用曝光、白平衡、对焦、增益等控制项。
 白色题板 ROI 检测参数单独写在 [robocon_ocr/roi_tuning.py](/home/angela/Robocon/OCR/robocon_ocr/roi_tuning.py) 里，方便单独调试阈值、面积和比例限制。
+OCR 输出会被严格限制在 `= ( ) 0-9 + - × ÷` 这组字符内，超出范围会直接判定失败。
 
 如果你想限制抓图帧数，或者保存拍摄原图和预处理调试图：
 

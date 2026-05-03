@@ -13,8 +13,8 @@ from PIL import Image
 
 from robocon_ocr.camera_tuning import DEFAULT_CAMERA_TUNING
 from robocon_ocr.config import CameraConfig, PipelineConfig
+from robocon_ocr.image_recognition.pix2tex_recognizer import OCRResult, Pix2TexMathRecognizer
 from robocon_ocr.image_recognition.preprocess import PreprocessResult, ROIDebugInfo, prepare_image_for_ocr, save_debug_images
-from robocon_ocr.image_recognition.tesseract_recognizer import OCRResult, TesseractMathRecognizer
 from robocon_ocr.pipeline import _select_best_result, run_pipeline
 from robocon_ocr.result.expression import ParsedExpression
 from robocon_ocr.result.reporter import PipelineRecord, summarize
@@ -420,7 +420,7 @@ def _show_debug_windows(display: DisplayState, window_scale: float) -> bool:
         gray_bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
         gray_bgr = _draw_roi_quad(gray_bgr, display.record.roi_quad)
 
-        prepared_bgr = cv2.cvtColor(np.asarray(display.preprocess.prepared), cv2.COLOR_GRAY2BGR)
+        rectified_bgr = cv2.cvtColor(np.asarray(display.preprocess.rectified), cv2.COLOR_RGB2BGR)
         text_panel = _build_text_panel(
             display.record,
             display.frame_index,
@@ -432,7 +432,7 @@ def _show_debug_windows(display: DisplayState, window_scale: float) -> bool:
         panel_h = color_bgr.shape[0]
         color_panel = _put_panel_title(_fit_panel(color_bgr, (panel_w, panel_h)), "Color Original")
         gray_panel = _put_panel_title(_fit_panel(gray_bgr, (panel_w, panel_h)), "Gray Original")
-        binary_panel = _put_panel_title(_fit_panel(prepared_bgr, (panel_w, panel_h)), "OCR Input")
+        binary_panel = _put_panel_title(_fit_panel(rectified_bgr, (panel_w, panel_h)), "OCR Input")
         info_panel = _put_panel_title(_fit_panel(text_panel, (panel_w, panel_h)), "OCR / Debug")
 
         top_row = np.hstack([color_panel, gray_panel])
@@ -473,7 +473,7 @@ def _process_camera_frame(
     frame_index: int,
     args: argparse.Namespace,
     pipeline_config: PipelineConfig,
-    recognizer: TesseractMathRecognizer,
+    recognizer: Pix2TexMathRecognizer,
 ) -> tuple[PipelineRecord, PreprocessResult, Image.Image, float]:
     try:
         import cv2
@@ -497,7 +497,7 @@ def _process_camera_frame(
         record = _empty_camera_record(f"camera_{args.device_index}_{frame_index:06d}.png", preprocess_result)
         return record, preprocess_result, image_rgb, (time.perf_counter() - started_at) * 1000.0
 
-    ocr_candidates = recognizer.recognize_candidates(preprocess_result.prepared)
+    ocr_candidates = recognizer.recognize_candidates(preprocess_result.rectified)
     ocr_result, parsed = _select_best_result(ocr_candidates)
     record = PipelineRecord(
         image_name=f"camera_{args.device_index}_{frame_index:06d}.png",
@@ -516,7 +516,9 @@ def _run_async_camera(args: argparse.Namespace) -> int:
         dataset_dir=Path("."),
         debug_dir=args.debug_dir.expanduser() if args.debug_dir else None,
     )
-    recognizer = TesseractMathRecognizer(pipeline_config.ocr)
+    recognizer = Pix2TexMathRecognizer(pipeline_config.ocr)
+    if pipeline_config.ocr.warmup:
+        recognizer.warmup()
     buffer = LatestFrameBuffer()
     stats = CameraStats()
     stop_event = threading.Event()

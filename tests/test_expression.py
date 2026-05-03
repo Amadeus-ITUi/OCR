@@ -1,4 +1,4 @@
-from robocon_ocr.result.expression import parse_expression
+from robocon_ocr.result.expression import normalize_ocr_text, parse_expression, validate_ocr_text
 
 
 def test_parse_simple_expression():
@@ -39,3 +39,26 @@ def test_repair_unmatched_parentheses():
     assert parsed.is_valid
     assert parsed.expression == "(6+3+(4×3))×8-(4+4)+8+18"
     assert parsed.answer == 186
+
+
+def test_normalize_latex_math_symbols():
+    assert normalize_ocr_text("3 \\times 4 =") == "3×4="
+    assert normalize_ocr_text("\\left(1+2\\right) \\div 3") == "(1+2)÷3"
+
+
+def test_reject_unsupported_symbol_outside_charset():
+    normalized = normalize_ocr_text("\\frac{1}{2}")
+    assert normalized == "12"
+
+    parsed = parse_expression("\\frac{1}{2}")
+    assert not parsed.is_valid
+    assert parsed.error == "unsupported symbol outside arithmetic charset"
+
+
+def test_extract_arithmetic_expression_from_noisy_pix2tex_latex():
+    parsed = parse_expression(
+        "\\left(\\begin{array}{l l}{{}}&{{}}\\\\ {{}}&{{}}\\\\ {{}}&{{2+9\\times10\\times3\\cdot7=}}\\end{array}\\right)"
+    )
+    assert parsed.is_valid
+    assert parsed.expression == "2+9×10×3×7"
+    assert parsed.answer == 1892

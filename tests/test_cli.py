@@ -1,4 +1,4 @@
-import shutil
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +17,7 @@ from robocon_ocr.cli import (
     resolve_label_file,
 )
 from robocon_ocr.config import PipelineConfig
+from robocon_ocr.image_recognition.pix2tex_recognizer import OCRResult
 from robocon_ocr.image_recognition.preprocess import prepare_image_for_ocr
 from robocon_ocr.pipeline import run_image_pipeline
 
@@ -131,13 +132,30 @@ def test_latest_frame_buffer_keeps_only_newest_frame():
 
 
 def test_run_image_pipeline_on_synthetic_camera_frame(tmp_path: Path):
+    class StubRecognizer:
+        def __init__(self, config) -> None:
+            self.config = config
+
+        def warmup(self) -> None:
+            return None
+
+        def recognize_candidates(self, image):
+            return [OCRResult(raw_text="5+2=", confidence=1.0, lines=["5+2="])]
+
     image = _create_board_image()
 
-    record = run_image_pipeline(
-        image=image,
-        image_name="camera_0.png",
-        config=PipelineConfig(dataset_dir=tmp_path),
-    )
+    import robocon_ocr.pipeline as pipeline_module
+
+    original = pipeline_module.Pix2TexMathRecognizer
+    pipeline_module.Pix2TexMathRecognizer = StubRecognizer
+    try:
+        record = run_image_pipeline(
+            image=image,
+            image_name="camera_0.png",
+            config=PipelineConfig(dataset_dir=tmp_path),
+        )
+    finally:
+        pipeline_module.Pix2TexMathRecognizer = original
 
     assert record.image_name == "camera_0.png"
     assert record.roi_found is True
@@ -170,7 +188,7 @@ def test_roi_debug_lines_render_thresholds_and_reason(tmp_path: Path):
     assert any(line.startswith("WhiteThr:") for line in lines)
 
 
-@pytest.mark.skipif(shutil.which("tesseract") is None, reason="tesseract not installed")
+@pytest.mark.skipif(importlib.util.find_spec("pix2tex") is None, reason="pix2tex not installed")
 def test_module_cli_uses_auto_detected_label_file(tmp_path: Path):
     _create_board_image().save(tmp_path / "problem_0001.png")
     (tmp_path / "problems_and_answers.txt").write_text(
@@ -190,7 +208,7 @@ def test_module_cli_uses_auto_detected_label_file(tmp_path: Path):
     assert "expression_match: True" in result.stdout
 
 
-@pytest.mark.skipif(shutil.which("tesseract") is None, reason="tesseract not installed")
+@pytest.mark.skipif(importlib.util.find_spec("pix2tex") is None, reason="pix2tex not installed")
 def test_module_cli_runs_without_label_file(tmp_path: Path):
     _create_board_image().save(tmp_path / "problem_0001.png")
 
@@ -207,7 +225,7 @@ def test_module_cli_runs_without_label_file(tmp_path: Path):
     assert "[summary]" in result.stdout
 
 
-@pytest.mark.skipif(shutil.which("tesseract") is None, reason="tesseract not installed")
+@pytest.mark.skipif(importlib.util.find_spec("pix2tex") is None, reason="pix2tex not installed")
 def test_legacy_script_entry_still_works(tmp_path: Path):
     _create_board_image().save(tmp_path / "problem_0001.png")
     (tmp_path / "problems_and_answers.txt").write_text(

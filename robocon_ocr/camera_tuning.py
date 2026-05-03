@@ -54,7 +54,7 @@ DEFAULT_CAMERA_TUNING = CameraConfig(
     # 白色题板发光、黑字发灰：减小它。
     # 整体太暗、黑字断裂：增大它。
     # 当前白底黑字屏幕场景，从 80 起步通常比较稳。
-    exposure_time_absolute=80,
+    exposure_time_absolute=200,
 
     # 增益：尽量保持低。
     # 增益会放大噪声，让字符边缘变脏。
