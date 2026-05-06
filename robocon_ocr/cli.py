@@ -13,12 +13,18 @@ from PIL import Image
 
 from robocon_ocr.camera_tuning import DEFAULT_CAMERA_TUNING
 from robocon_ocr.config import CameraConfig, PipelineConfig
-from robocon_ocr.image_recognition.pix2tex_recognizer import OCRResult, Pix2TexMathRecognizer
-from robocon_ocr.image_recognition.preprocess import PreprocessResult, ROIDebugInfo, prepare_image_for_ocr, save_debug_images
-from robocon_ocr.pipeline import _recognize_with_fallback_variants, _select_best_result, run_pipeline
-from robocon_ocr.result.expression import ParsedExpression
+from robocon_ocr.image_recognition.pix2tex_recognizer import Pix2TexMathRecognizer
 from robocon_ocr.result.reporter import PipelineRecord, summarize
+from robocon_ocr.staged_pipeline import STAGE_SEQUENCE
+from robocon_ocr.staged_pipeline import PipelineContext
+from robocon_ocr.staged_pipeline import context_to_record
+from robocon_ocr.staged_pipeline import run_camera_pipeline_frame
+from robocon_ocr.staged_pipeline import save_stage_debug_images
 from robocon_ocr.vision_capture.usb_camera import USBCameraCapture
+from robocon_ocr.vision_processing.board_detection import ROIDebugInfo
+from robocon_ocr.pipeline import run_pipeline
+
+STAGE_CHOICES = list(STAGE_SEQUENCE)
 
 
 @dataclass(slots=True)
@@ -66,11 +72,23 @@ class CameraStats:
 
 @dataclass(slots=True)
 class DisplayState:
-    original: Image.Image
-    preprocess: PreprocessResult
+    context: PipelineContext
     record: PipelineRecord
     frame_index: int
-    ocr_ms: float
+    stage_ms: float
+
+
+def _add_stage_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--stop-after-stage",
+        choices=STAGE_CHOICES,
+        help="Stop the pipeline after a specific stage.",
+    )
+    parser.add_argument(
+        "--debug-save-stages",
+        action="store_true",
+        help="Save stage-by-stage debug images into --debug-dir.",
+    )
 
 
 def build_argparser() -> argparse.ArgumentParser:
@@ -89,6 +107,7 @@ def build_argparser() -> argparse.ArgumentParser:
         type=Path,
         help="Directory for cropped/preprocessed debug images.",
     )
+    _add_stage_arguments(dataset_parser)
 
     camera_parser = subparsers.add_parser("camera", help="Run realtime OCR on a USB camera stream.")
     camera_parser.add_argument("--device-index", type=int, help="USB camera device index. Default comes from camera_tuning.py.")
@@ -130,6 +149,17 @@ def build_argparser() -> argparse.ArgumentParser:
         help="Show cv2 debug windows with the live frame and OCR details.",
     )
     camera_parser.add_argument(
+        "--show-stage-debug",
+        action="store_true",
+        help="Render the stage dashboard in the debug window.",
+    )
+    camera_parser.add_argument(
+        "--stage-panel-layout",
+        default="auto",
+        choices=["auto"],
+        help="Stage panel layout preset. Current supported value: auto.",
+    )
+    camera_parser.add_argument(
         "--window-scale",
         type=float,
         default=0.75,
@@ -145,6 +175,7 @@ def build_argparser() -> argparse.ArgumentParser:
         type=Path,
         help="Directory for cropped/preprocessed debug images.",
     )
+    _add_stage_arguments(camera_parser)
     return parser
 
 
@@ -164,6 +195,8 @@ def build_config(args: argparse.Namespace) -> PipelineConfig:
         dataset_dir=dataset_dir,
         label_file=resolve_label_file(dataset_dir, args.label_file),
         debug_dir=args.debug_dir.expanduser() if args.debug_dir else None,
+        stop_after_stage=args.stop_after_stage,
+        debug_save_stages=args.debug_save_stages,
     )
 
 
@@ -303,39 +336,6 @@ def _format_roi_debug_lines(roi_debug: ROIDebugInfo) -> list[str]:
     ]
 
 
-def _draw_roi_debug_overlay(frame_bgr: np.ndarray, roi_debug: ROIDebugInfo) -> np.ndarray:
-    try:
-        import cv2
-    except ModuleNotFoundError as exc:
-        raise RuntimeError("未安装 OpenCV GUI 版本，无法显示调试窗口。") from exc
-
-    canvas = frame_bgr.copy()
-    lines = _format_roi_debug_lines(roi_debug)
-    if not lines:
-        return canvas
-
-    overlay = canvas.copy()
-    panel_width = min(max(320, int(canvas.shape[1] * 0.34)), canvas.shape[1] - 20)
-    panel_height = min(32 + (len(lines) * 24), canvas.shape[0] - 20)
-    x0 = max(10, canvas.shape[1] - panel_width - 10)
-    y0 = 44
-    x1 = x0 + panel_width
-    y1 = y0 + panel_height
-    cv2.rectangle(overlay, (x0, y0), (x1, y1), (10, 10, 10), thickness=-1)
-    cv2.addWeighted(overlay, 0.55, canvas, 0.45, 0, canvas)
-
-    y = y0 + 24
-    cv2.putText(canvas, "ROI Debug", (x0 + 12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (120, 220, 255), 2, cv2.LINE_AA)
-    y += 24
-    for line in lines:
-        color = (235, 235, 235)
-        if line.startswith("Reason:") and roi_debug.failure_reason is not None:
-            color = (80, 160, 255)
-        cv2.putText(canvas, line, (x0 + 12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.53, color, 1, cv2.LINE_AA)
-        y += 22
-    return canvas
-
-
 def _put_panel_title(image_bgr: np.ndarray, title: str) -> np.ndarray:
     try:
         import cv2
@@ -355,16 +355,105 @@ def _fit_panel(image_bgr: np.ndarray, target_size: tuple[int, int]) -> np.ndarra
         raise RuntimeError("未安装 OpenCV GUI 版本，无法显示调试窗口。") from exc
 
     target_w, target_h = target_size
-    resized = cv2.resize(image_bgr, (target_w, target_h), interpolation=cv2.INTER_AREA)
-    return resized
+    return cv2.resize(image_bgr, (target_w, target_h), interpolation=cv2.INTER_AREA)
 
 
-def _build_text_panel(
-    record: PipelineRecord,
-    frame_index: int,
-    ocr_ms: float,
-    panel_size: tuple[int, int],
-) -> np.ndarray:
+def _fit_panel_preserve_aspect(image_bgr: np.ndarray, target_size: tuple[int, int]) -> np.ndarray:
+    try:
+        import cv2
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("未安装 OpenCV GUI 版本，无法显示调试窗口。") from exc
+
+    target_w, target_h = target_size
+    src_h, src_w = image_bgr.shape[:2]
+    if src_h <= 0 or src_w <= 0:
+        return np.zeros((target_h, target_w, 3), dtype=np.uint8)
+
+    scale = min(target_w / src_w, target_h / src_h)
+    resized_w = max(1, int(round(src_w * scale)))
+    resized_h = max(1, int(round(src_h * scale)))
+    interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+    resized = cv2.resize(image_bgr, (resized_w, resized_h), interpolation=interpolation)
+
+    canvas = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+    offset_x = (target_w - resized_w) // 2
+    offset_y = (target_h - resized_h) // 2
+    canvas[offset_y : offset_y + resized_h, offset_x : offset_x + resized_w] = resized
+    return canvas
+
+
+def _pil_to_bgr(image: Image.Image | None, target_size: tuple[int, int]) -> np.ndarray:
+    try:
+        import cv2
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("未安装 OpenCV GUI 版本，无法显示调试窗口。") from exc
+
+    width, height = target_size
+    if image is None:
+        return np.zeros((height, width, 3), dtype=np.uint8)
+    rgb = image.convert("RGB")
+    bgr = cv2.cvtColor(np.asarray(rgb), cv2.COLOR_RGB2BGR)
+    return _fit_panel_preserve_aspect(bgr, target_size)
+
+
+def _build_info_lines(display: DisplayState) -> list[str]:
+    context = display.context
+    record = display.record
+    lines = [
+        "Pipeline Status",
+        f"Frame: {display.frame_index}",
+        f"Latency: {display.stage_ms:.1f} ms",
+        f"Completed: {context.completed_stage or 'none'}",
+        f"StopAfter: {context.stop_after_stage or 'none'}",
+        f"ROI: {record.roi_found}",
+        f"Confidence: {record.ocr.confidence:.4f}",
+        f"Valid: {record.parsed.is_valid}",
+        "Raw:",
+    ]
+    lines.extend(_wrap_text(record.ocr.raw_text or "<empty>"))
+    lines.append("Expression:")
+    lines.extend(_wrap_text(record.parsed.expression or "<empty>"))
+    lines.append(f"Answer: {record.parsed.answer}")
+    if record.ocr.error:
+        lines.append("OCR Error:")
+        lines.extend(_wrap_text(record.ocr.error))
+    if record.parsed.error:
+        lines.append("Error:")
+        lines.extend(_wrap_text(record.parsed.error))
+    if context.board_detection is not None:
+        lines.append("Board Debug:")
+        lines.extend(_format_roi_debug_lines(context.board_detection.roi_debug)[:6])
+    if context.expression_region is not None:
+        lines.append("Expr Region:")
+        lines.append(f"Found: {context.expression_region.region_found}")
+        lines.append(f"BBox: {context.expression_region.bbox}")
+        lines.append(f"Rows: {context.expression_region.row_range}")
+        lines.append(f"Cols: {context.expression_region.col_range}")
+        lines.append(f"Otsu: {context.expression_region.otsu_threshold}")
+        lines.append(f"RowPeak: {context.expression_region.projection_summary.row_peak:.4f}")
+        lines.append(
+            "RowThr: "
+            f"{context.expression_region.projection_summary.row_enter_threshold:.4f}/"
+            f"{context.expression_region.projection_summary.row_exit_threshold:.4f}"
+        )
+        lines.append(f"ColPeak: {context.expression_region.projection_summary.col_peak:.4f}")
+        lines.append(
+            "ColThr: "
+            f"{context.expression_region.projection_summary.col_enter_threshold:.4f}/"
+            f"{context.expression_region.projection_summary.col_exit_threshold:.4f}"
+        )
+        lines.append(f"Search: {context.expression_region.search_window}")
+        lines.append(f"Effective: {context.expression_region.effective_search_window}")
+        if context.expression_region.failure_reason:
+            lines.append(f"Reason: {context.expression_region.failure_reason}")
+    snapshot = context.snapshots.get(context.completed_stage or "")
+    if snapshot is not None and snapshot.lines:
+        lines.append("Stage Notes:")
+        lines.extend(snapshot.lines)
+    return lines
+
+
+def _build_text_panel(lines: list[str], panel_size: tuple[int, int]) -> np.ndarray:
     try:
         import cv2
     except ModuleNotFoundError as exc:
@@ -373,41 +462,20 @@ def _build_text_panel(
     panel_w, panel_h = panel_size
     canvas = np.zeros((panel_h, panel_w, 3), dtype=np.uint8)
     canvas[:, :] = (28, 28, 28)
-
     text_x = 18
     y = 42
-    line_gap = 28
-    small_gap = 22
     font = cv2.FONT_HERSHEY_SIMPLEX
 
-    def put(line: str, color=(235, 235, 235), scale=0.6, thickness=1, gap=line_gap):
-        nonlocal y
-        if y < panel_h - 10:
-            cv2.putText(canvas, line, (text_x, y), font, scale, color, thickness, cv2.LINE_AA)
-        y += gap
-
-    put("OCR Results / Debug", color=(120, 220, 255), scale=0.8, thickness=2, gap=34)
-    put(f"Frame: {frame_index}", color=(120, 220, 255), scale=0.72, thickness=2)
-    put(f"OCR: {ocr_ms:.1f} ms", color=(120, 220, 255), gap=small_gap)
-    put(f"ROI: {record.roi_found}", color=(120, 255, 160) if record.roi_found else (80, 160, 255), gap=small_gap)
-    put(f"Confidence: {record.ocr.confidence:.4f}", gap=small_gap)
-    put(f"PSM: {record.ocr.psm}", gap=small_gap)
-    put(f"Valid: {record.parsed.is_valid}", color=(120, 255, 160) if record.parsed.is_valid else (80, 160, 255))
-    put("Raw:", color=(180, 180, 255), gap=small_gap)
-    for line in _wrap_text(record.ocr.raw_text or "<empty>"):
-        put(line, scale=0.54, gap=small_gap)
-    put("Expression:", color=(180, 180, 255), gap=small_gap)
-    for line in _wrap_text(record.parsed.expression or "<empty>"):
-        put(line, scale=0.54, gap=small_gap)
-    put(f"Answer: {record.parsed.answer}", gap=small_gap)
-    if record.parsed.error:
-        put("Error:", color=(80, 160, 255), gap=small_gap)
-        for line in _wrap_text(record.parsed.error):
-            put(line, color=(80, 160, 255), scale=0.54, gap=small_gap)
-    if record.ocr.error:
-        put("OCR Error:", color=(80, 160, 255), gap=small_gap)
-        for line in _wrap_text(record.ocr.error):
-            put(line, color=(80, 160, 255), scale=0.54, gap=small_gap)
+    for index, line in enumerate(lines):
+        if y >= panel_h - 10:
+            break
+        scale = 0.8 if index == 0 else 0.54
+        thickness = 2 if index == 0 else 1
+        color = (120, 220, 255) if index == 0 else (235, 235, 235)
+        if line.startswith("Error:") or line.startswith("OCR Error:") or line.startswith("Reason:"):
+            color = (80, 160, 255)
+        cv2.putText(canvas, line, (text_x, y), font, scale, color, thickness, cv2.LINE_AA)
+        y += 30 if index == 0 else 22
     return canvas
 
 
@@ -418,31 +486,28 @@ def _show_debug_windows(display: DisplayState, window_scale: float) -> bool:
         raise RuntimeError("未安装 OpenCV GUI 版本，无法显示调试窗口。") from exc
 
     try:
-        color_bgr = cv2.cvtColor(np.asarray(display.original), cv2.COLOR_RGB2BGR)
-        color_bgr = _draw_roi_quad(color_bgr, display.record.roi_quad)
-        color_bgr = _draw_roi_debug_overlay(color_bgr, display.preprocess.roi_debug)
+        original_bgr = cv2.cvtColor(np.asarray(display.context.original), cv2.COLOR_RGB2BGR)
+        original_bgr = _draw_roi_quad(original_bgr, display.record.roi_quad)
+        panel_w = original_bgr.shape[1]
+        panel_h = original_bgr.shape[0]
 
-        gray = cv2.cvtColor(np.asarray(display.original), cv2.COLOR_RGB2GRAY)
-        gray_bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-        gray_bgr = _draw_roi_quad(gray_bgr, display.record.roi_quad)
+        board_debug = None
+        if display.context.board_detection is not None:
+            board_debug = display.context.board_detection.debug_image
+        stage_snapshot = display.context.snapshots.get(display.context.completed_stage or "")
+        stage_image = None if stage_snapshot is None else stage_snapshot.image
+        info_lines = _build_info_lines(display)
 
-        rectified_bgr = cv2.cvtColor(np.asarray(display.preprocess.rectified), cv2.COLOR_RGB2BGR)
-        text_panel = _build_text_panel(
-            display.record,
-            display.frame_index,
-            display.ocr_ms,
-            panel_size=(color_bgr.shape[1], color_bgr.shape[0]),
+        top_left = _put_panel_title(_fit_panel_preserve_aspect(original_bgr, (panel_w, panel_h)), "Color Original")
+        top_right = _put_panel_title(_pil_to_bgr(board_debug, (panel_w, panel_h)), "Board Detection")
+        bottom_left = _put_panel_title(_pil_to_bgr(stage_image, (panel_w, panel_h)), "Current Stage Output")
+        bottom_right = _put_panel_title(
+            _fit_panel(_build_text_panel(info_lines, (panel_w, panel_h)), (panel_w, panel_h)),
+            "Stage / OCR Status",
         )
 
-        panel_w = color_bgr.shape[1]
-        panel_h = color_bgr.shape[0]
-        color_panel = _put_panel_title(_fit_panel(color_bgr, (panel_w, panel_h)), "Color Original")
-        gray_panel = _put_panel_title(_fit_panel(gray_bgr, (panel_w, panel_h)), "Gray Original")
-        binary_panel = _put_panel_title(_fit_panel(rectified_bgr, (panel_w, panel_h)), "OCR Input")
-        info_panel = _put_panel_title(_fit_panel(text_panel, (panel_w, panel_h)), "OCR / Debug")
-
-        top_row = np.hstack([color_panel, gray_panel])
-        bottom_row = np.hstack([binary_panel, info_panel])
+        top_row = np.hstack([top_left, top_right])
+        bottom_row = np.hstack([bottom_left, bottom_right])
         dashboard = np.vstack([top_row, bottom_row])
         if window_scale != 1.0:
             dashboard = cv2.resize(dashboard, None, fx=window_scale, fy=window_scale, interpolation=cv2.INTER_AREA)
@@ -465,15 +530,20 @@ def _save_camera_frame(image_rgb: Image.Image, save_path: Path | None) -> None:
     image_rgb.save(save_path)
 
 
-def _empty_camera_record(image_name: str, preprocess: PreprocessResult) -> PipelineRecord:
-    return PipelineRecord(
-        image_name=image_name,
-        ocr=OCRResult(raw_text="", confidence=0.0, lines=[], psm=None, error="roi not found"),
-        parsed=ParsedExpression("", "", None, False, "roi not found"),
-        label=None,
-        roi_found=preprocess.roi_found,
-        roi_quad=preprocess.roi_quad,
-    )
+def _save_camera_debug_outputs(context: PipelineContext, pipeline_config: PipelineConfig) -> None:
+    if pipeline_config.debug_dir is None:
+        return
+    pipeline_config.debug_dir.mkdir(parents=True, exist_ok=True)
+    stem = Path(context.image_name).stem
+    if context.rectification is not None:
+        context.rectification.cropped.save(pipeline_config.debug_dir / f"{stem}_cropped.png")
+        context.rectification.rectified.save(pipeline_config.debug_dir / f"{stem}_rectified.png")
+    if context.enhancement is not None:
+        context.enhancement.prepared_for_ocr.save(pipeline_config.debug_dir / f"{stem}_prepared.png")
+    if context.expression_region is not None and context.expression_region.cropped_region is not None:
+        context.expression_region.cropped_region.save(pipeline_config.debug_dir / f"{stem}_expression_region.png")
+    if pipeline_config.debug_save_stages:
+        save_stage_debug_images(context, pipeline_config.debug_dir)
 
 
 def _process_camera_frame(
@@ -482,40 +552,31 @@ def _process_camera_frame(
     args: argparse.Namespace,
     pipeline_config: PipelineConfig,
     recognizer: Pix2TexMathRecognizer,
-) -> tuple[PipelineRecord, PreprocessResult, Image.Image, float]:
+) -> tuple[PipelineRecord, PipelineContext, float]:
     try:
         import cv2
     except ModuleNotFoundError as exc:
         raise RuntimeError("未安装 OpenCV。请先执行 `pip install -r requirements.txt`。") from exc
 
+    image_name = f"camera_{args.device_index}_{frame_index:06d}.png"
     image_rgb = Image.fromarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
     started_at = time.perf_counter()
-    preprocess_result = prepare_image_for_ocr(image_rgb, pipeline_config.preprocess)
-    if pipeline_config.debug_dir is not None:
-        save_debug_images(
-            f"camera_{args.device_index}_{frame_index:06d}.png",
-            preprocess_result.cropped,
-            preprocess_result.prepared,
-            pipeline_config.debug_dir,
-            rectified=preprocess_result.rectified,
-        )
-    _save_camera_frame(image_rgb, args.save_frame.expanduser() if args.save_frame else None)
-
-    if not preprocess_result.roi_found:
-        record = _empty_camera_record(f"camera_{args.device_index}_{frame_index:06d}.png", preprocess_result)
-        return record, preprocess_result, image_rgb, (time.perf_counter() - started_at) * 1000.0
-
-    ocr_candidates = _recognize_with_fallback_variants(recognizer, preprocess_result)
-    ocr_result, parsed = _select_best_result(ocr_candidates)
-    record = PipelineRecord(
-        image_name=f"camera_{args.device_index}_{frame_index:06d}.png",
-        ocr=ocr_result,
-        parsed=parsed,
-        label=None,
-        roi_found=True,
-        roi_quad=preprocess_result.roi_quad,
+    context = run_camera_pipeline_frame(
+        frame=image_rgb,
+        image_name=image_name,
+        config=pipeline_config,
+        recognizer=recognizer,
     )
-    return record, preprocess_result, image_rgb, (time.perf_counter() - started_at) * 1000.0
+    _save_camera_frame(image_rgb, args.save_frame.expanduser() if args.save_frame else None)
+    _save_camera_debug_outputs(context, pipeline_config)
+    record = context_to_record(context)
+    return record, context, (time.perf_counter() - started_at) * 1000.0
+
+
+def _stop_before_ocr(stop_after_stage: str | None) -> bool:
+    if stop_after_stage is None:
+        return False
+    return STAGE_SEQUENCE.index(stop_after_stage) < STAGE_SEQUENCE.index("ocr")
 
 
 def _run_async_camera(args: argparse.Namespace) -> int:
@@ -523,9 +584,11 @@ def _run_async_camera(args: argparse.Namespace) -> int:
     pipeline_config = PipelineConfig(
         dataset_dir=Path("."),
         debug_dir=args.debug_dir.expanduser() if args.debug_dir else None,
+        stop_after_stage=args.stop_after_stage,
+        debug_save_stages=args.debug_save_stages,
     )
     recognizer = Pix2TexMathRecognizer(pipeline_config.ocr)
-    if pipeline_config.ocr.warmup:
+    if pipeline_config.ocr.warmup and not _stop_before_ocr(pipeline_config.stop_after_stage):
         recognizer.warmup()
     buffer = LatestFrameBuffer()
     stats = CameraStats()
@@ -558,7 +621,7 @@ def _run_async_camera(args: argparse.Namespace) -> int:
                 frame_index, frame_bgr, _captured_at = item
                 if last_processed_index >= 0 and frame_index > last_processed_index + 1:
                     stats.frames_dropped_stale += frame_index - last_processed_index - 1
-                record, preprocess_result, image_rgb, ocr_ms = _process_camera_frame(
+                record, context, stage_ms = _process_camera_frame(
                     frame_bgr=frame_bgr,
                     frame_index=frame_index,
                     args=args,
@@ -566,7 +629,7 @@ def _run_async_camera(args: argparse.Namespace) -> int:
                     recognizer=recognizer,
                 )
                 last_processed_index = frame_index
-                if not preprocess_result.roi_found:
+                if not record.roi_found:
                     stats.frames_skipped_no_roi += 1
                 else:
                     stats.frames_processed += 1
@@ -577,11 +640,10 @@ def _run_async_camera(args: argparse.Namespace) -> int:
                         stats.frames_emitted += 1
                 with display_lock:
                     display_state = DisplayState(
-                        original=image_rgb,
-                        preprocess=preprocess_result,
+                        context=context,
                         record=record,
                         frame_index=frame_index,
-                        ocr_ms=ocr_ms,
+                        stage_ms=stage_ms,
                     )
         except Exception as exc:
             processing_error = exc

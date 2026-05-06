@@ -6,6 +6,8 @@ from PIL import Image, ImageDraw
 from robocon_ocr.config import PreprocessConfig
 from robocon_ocr.roi_tuning import DEFAULT_ROI_TUNING_VALUES
 from robocon_ocr.image_recognition.preprocess import crop_foreground_text, prepare_for_ocr, prepare_image_for_ocr
+from robocon_ocr.vision_processing.expression_region import _scan_boundary_backward
+from robocon_ocr.vision_processing.expression_region import extract_expression_region
 
 
 def _create_board_image(size=(1280, 720), quad=None) -> Image.Image:
@@ -38,6 +40,17 @@ def test_preprocess_config_defaults_come_from_roi_tuning():
     assert config.min_roi_area_ratio == DEFAULT_ROI_TUNING_VALUES["min_roi_area_ratio"]
     assert config.rectangle_ratio_tolerance == DEFAULT_ROI_TUNING_VALUES["rectangle_ratio_tolerance"]
     assert config.quadrilateral_ratio_tolerance == DEFAULT_ROI_TUNING_VALUES["quadrilateral_ratio_tolerance"]
+    assert config.expression_search_top_ratio == DEFAULT_ROI_TUNING_VALUES["expression_search_top_ratio"]
+    assert config.expression_search_bottom_ratio == DEFAULT_ROI_TUNING_VALUES["expression_search_bottom_ratio"]
+    assert config.expression_search_left_ratio == DEFAULT_ROI_TUNING_VALUES["expression_search_left_ratio"]
+    assert config.expression_search_right_ratio == DEFAULT_ROI_TUNING_VALUES["expression_search_right_ratio"]
+    assert config.expression_otsu_bias == DEFAULT_ROI_TUNING_VALUES["expression_otsu_bias"]
+    assert config.expression_enter_ratio == DEFAULT_ROI_TUNING_VALUES["expression_enter_ratio"]
+    assert config.expression_exit_ratio == DEFAULT_ROI_TUNING_VALUES["expression_exit_ratio"]
+    assert config.expression_min_consecutive_rows == DEFAULT_ROI_TUNING_VALUES["expression_min_consecutive_rows"]
+    assert config.expression_min_consecutive_cols == DEFAULT_ROI_TUNING_VALUES["expression_min_consecutive_cols"]
+    assert config.expression_bbox_padding_x == DEFAULT_ROI_TUNING_VALUES["expression_bbox_padding_x"]
+    assert config.expression_bbox_padding_y == DEFAULT_ROI_TUNING_VALUES["expression_bbox_padding_y"]
 
 
 def test_prepare_image_for_ocr_detects_perspective_quad():
@@ -49,8 +62,8 @@ def test_prepare_image_for_ocr_detects_perspective_quad():
     assert result.roi_quad is not None
     assert result.rectified.width == 1280
     assert result.rectified.height == 720
-    assert result.roi_debug.best_candidate_type in {"rectangle", "quadrilateral"}
-    assert result.roi_debug.best_candidate_source in {"component", "contour_fallback"}
+    assert result.roi_debug.best_candidate_type == "rectangle"
+    assert result.roi_debug.best_candidate_source == "rect_contour"
     assert result.roi_debug.failure_reason is None
     assert result.board_binary.mode == "L"
     assert result.prepared.mode == "L"
@@ -79,20 +92,71 @@ def test_prepare_image_for_ocr_reports_missing_roi():
         "area below threshold",
         "edge too weak",
         "rectangle ratio mismatch",
-        "quadrilateral ratio mismatch",
+        "rectangle fill too low",
+        "corners not rectangular",
         "no valid roi after filtering",
-        "component area below threshold",
-        "component fill ratio too low",
-        "component aspect mismatch",
-        "component corners not stable",
     }
 
 
-def test_prepare_image_for_ocr_prefers_component_source_for_clear_white_board():
+def test_prepare_image_for_ocr_uses_rect_contour_source_for_clear_white_board():
     image = _create_board_image()
 
     result = prepare_image_for_ocr(image, PreprocessConfig())
 
     assert result.roi_found is True
-    assert result.roi_debug.best_candidate_source == "component"
-    assert result.roi_debug.component_count >= 1
+    assert result.roi_debug.best_candidate_source == "rect_contour"
+    assert result.roi_debug.component_count == 0
+
+
+def test_extract_expression_region_ignores_black_frame():
+    image = Image.new("RGB", (1280, 720), (210, 235, 245))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((40, 40, 1239, 679), outline="black", width=18)
+    draw.text((430, 300), "11+(4x8)=", fill="black")
+
+    result = extract_expression_region(image, PreprocessConfig())
+
+    assert result.region_found is True
+    assert result.bbox is not None
+    x0, y0, x1, y1 = result.bbox
+    assert x0 > 80
+    assert y0 > 80
+    assert x1 < 1200
+    assert y1 < 660
+
+
+def test_extract_expression_region_uses_otsu_on_blue_tinted_board():
+    image = Image.new("RGB", (1280, 720), (185, 220, 238))
+    draw = ImageDraw.Draw(image)
+    draw.text((360, 280), "11 + (4 x 8) =", fill=(20, 20, 20))
+
+    result = extract_expression_region(image, PreprocessConfig())
+
+    assert result.region_found is True
+    assert result.otsu_threshold is not None
+    assert result.bbox is not None
+    assert result.cropped_region is not None
+    assert result.cropped_region.width < image.width
+    assert result.cropped_region.height < image.height
+
+
+def test_scan_boundary_backward_stops_near_foreground_end():
+    values = np.array([0.0, 0.0, 0.0, 0.02, 0.03, 0.02, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+
+    boundary = _scan_boundary_backward(
+        values,
+        enter_threshold=0.01,
+        exit_threshold=0.003,
+        min_consecutive=3,
+    )
+
+    assert boundary == 6
+
+
+def test_extract_expression_region_reports_row_top_failure_on_empty_board():
+    image = Image.new("RGB", (1280, 720), (210, 235, 245))
+
+    result = extract_expression_region(image, PreprocessConfig())
+
+    assert result.region_found is False
+    assert result.failure_reason == "row top not found"

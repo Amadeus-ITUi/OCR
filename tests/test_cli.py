@@ -11,6 +11,7 @@ from robocon_ocr.camera_tuning import DEFAULT_CAMERA_TUNING
 from robocon_ocr.cli import (
     LatestFrameBuffer,
     _format_roi_debug_lines,
+    _fit_panel_preserve_aspect,
     build_argparser,
     build_camera_config,
     build_config,
@@ -52,6 +53,31 @@ def test_build_config_auto_detects_manifest(tmp_path: Path):
     assert config.dataset_dir == dataset_dir
     assert config.label_file == manifest
     assert config.debug_dir is None
+    assert config.stop_after_stage is None
+    assert config.debug_save_stages is False
+
+
+def test_build_config_supports_stage_stop_and_stage_debug_dir(tmp_path: Path):
+    dataset_dir = tmp_path / "dataset"
+    dataset_dir.mkdir()
+    debug_dir = tmp_path / "debug"
+
+    args = build_argparser().parse_args(
+        [
+            "dataset",
+            str(dataset_dir),
+            "--debug-dir",
+            str(debug_dir),
+            "--stop-after-stage",
+            "expression_region",
+            "--debug-save-stages",
+        ]
+    )
+    config = build_config(args)
+
+    assert config.debug_dir == debug_dir
+    assert config.stop_after_stage == "expression_region"
+    assert config.debug_save_stages is True
 
 
 def test_build_camera_config_from_args():
@@ -101,6 +127,17 @@ def test_build_camera_config_from_args():
     assert config.async_latest_frame is True
     assert config.exposure_time_absolute == DEFAULT_CAMERA_TUNING.exposure_time_absolute
     assert config.focus_absolute == DEFAULT_CAMERA_TUNING.focus_absolute
+
+
+def test_fit_panel_preserve_aspect_adds_letterbox_instead_of_stretching():
+    image = np.full((100, 300, 3), 255, dtype=np.uint8)
+
+    panel = _fit_panel_preserve_aspect(image, (200, 200))
+
+    assert panel.shape == (200, 200, 3)
+    assert np.all(panel[0:60] == 0)
+    assert np.all(panel[140:200] == 0)
+    assert np.all(panel[70:130, 20:180] == 255)
 
 
 def test_camera_parser_defaults_match_local_camera_setup():

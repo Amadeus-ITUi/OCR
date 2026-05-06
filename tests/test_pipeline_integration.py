@@ -4,6 +4,7 @@ from robocon_ocr.config import PipelineConfig
 from robocon_ocr.image_recognition.pix2tex_recognizer import OCRResult
 from robocon_ocr.pipeline import _recognize_with_fallback_variants, run_pipeline
 from robocon_ocr.image_recognition.preprocess import prepare_image_for_ocr
+from robocon_ocr.staged_pipeline import run_dataset_pipeline_image
 
 
 def test_problem_0001_is_not_empty_expression(tmp_path):
@@ -63,3 +64,51 @@ def test_recognize_with_fallback_variants_uses_prepared_on_failure(tmp_path):
 
     assert candidates[0].error == "unsupported symbol outside arithmetic charset"
     assert any(candidate.raw_text == "5+2=" for candidate in candidates[1:])
+
+
+def test_run_dataset_pipeline_image_stop_after_board_detection_skips_ocr(tmp_path):
+    image = Image.new("RGB", (1280, 720), (30, 40, 50))
+    draw = ImageDraw.Draw(image)
+    draw.polygon([(220, 140), (1060, 140), (1060, 612), (220, 612)], fill="white")
+    draw.text((460, 320), "5+2=", fill="black")
+
+    class FailIfCalledRecognizer:
+        def recognize(self, image):
+            raise AssertionError("OCR should not run when stop_after_stage=board_detection")
+
+    context = run_dataset_pipeline_image(
+        image=image,
+        image_name="problem_0001.png",
+        config=PipelineConfig(dataset_dir=tmp_path, stop_after_stage="board_detection"),
+        recognizer=FailIfCalledRecognizer(),
+    )
+
+    assert context.board_detection is not None
+    assert context.board_detection.roi_found is True
+    assert context.rectification is None
+    assert context.enhancement is None
+    assert context.ocr_stage is None
+    assert context.parsed is None
+
+
+def test_run_dataset_pipeline_image_extracts_expression_region(tmp_path):
+    image = Image.new("RGB", (1280, 720), (30, 40, 50))
+    draw = ImageDraw.Draw(image)
+    draw.polygon([(220, 140), (1060, 140), (1060, 612), (220, 612)], fill="white")
+    draw.text((460, 320), "5+2=", fill="black")
+
+    context = run_dataset_pipeline_image(
+        image=image,
+        image_name="problem_0001.png",
+        config=PipelineConfig(dataset_dir=tmp_path, stop_after_stage="expression_region"),
+    )
+
+    assert context.rectification is not None
+    assert context.expression_region is not None
+    assert context.expression_region.region_found is True
+    assert context.expression_region.cropped_region is not None
+    assert context.expression_region.cropped_region.width < context.rectification.rectified.width
+    assert context.expression_region.cropped_region.height < context.rectification.rectified.height
+    assert context.enhancement is None
+    assert context.ocr_stage is None
+    assert context.parsed is None

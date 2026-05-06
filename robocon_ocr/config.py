@@ -33,6 +33,17 @@ class PreprocessConfig:
     perspective_width: int = int(DEFAULT_ROI_TUNING_VALUES["perspective_width"])
     perspective_height: int = int(DEFAULT_ROI_TUNING_VALUES["perspective_height"])
     scale_factor: float = float(DEFAULT_ROI_TUNING_VALUES["scale_factor"])
+    expression_search_top_ratio: float = float(DEFAULT_ROI_TUNING_VALUES["expression_search_top_ratio"])
+    expression_search_bottom_ratio: float = float(DEFAULT_ROI_TUNING_VALUES["expression_search_bottom_ratio"])
+    expression_search_left_ratio: float = float(DEFAULT_ROI_TUNING_VALUES["expression_search_left_ratio"])
+    expression_search_right_ratio: float = float(DEFAULT_ROI_TUNING_VALUES["expression_search_right_ratio"])
+    expression_otsu_bias: int = int(DEFAULT_ROI_TUNING_VALUES["expression_otsu_bias"])
+    expression_enter_ratio: float = float(DEFAULT_ROI_TUNING_VALUES["expression_enter_ratio"])
+    expression_exit_ratio: float = float(DEFAULT_ROI_TUNING_VALUES["expression_exit_ratio"])
+    expression_min_consecutive_rows: int = int(DEFAULT_ROI_TUNING_VALUES["expression_min_consecutive_rows"])
+    expression_min_consecutive_cols: int = int(DEFAULT_ROI_TUNING_VALUES["expression_min_consecutive_cols"])
+    expression_bbox_padding_x: int = int(DEFAULT_ROI_TUNING_VALUES["expression_bbox_padding_x"])
+    expression_bbox_padding_y: int = int(DEFAULT_ROI_TUNING_VALUES["expression_bbox_padding_y"])
 
 
 @dataclass(slots=True)
@@ -71,5 +82,7 @@ class PipelineConfig:
     dataset_dir: Path
     label_file: Path | None = None
     debug_dir: Path | None = None
+    stop_after_stage: str | None = None
+    debug_save_stages: bool = False
     ocr: OCRConfig = field(default_factory=OCRConfig)
     preprocess: PreprocessConfig = field(default_factory=PreprocessConfig)

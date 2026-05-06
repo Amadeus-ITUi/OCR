@@ -41,7 +41,7 @@ DEFAULT_ROI_TUNING_VALUES: dict[str, int | float] = {
 
     # 最小 ROI 面积占比：题板在整张图里至少要占多大比例才会被接受。
     # 距离远导致题板变小、肉眼明显但总被漏掉时，优先尝试降到 0.03-0.06。
-    "min_roi_area_ratio": 0.03,
+    "min_roi_area_ratio": 0.015,
 
     # 矩形路径比例容差：越大越宽松。
     # 题板轮廓像矩形，但总因为比例不准被拒绝时，尝试提高到 0.25-0.35。
@@ -54,8 +54,8 @@ DEFAULT_ROI_TUNING_VALUES: dict[str, int | float] = {
     # 题板目标比例：当前场景固定为 16:9。
     "target_aspect_ratio": 16.0 / 9.0,
 
-    # ROI 外扩 padding：找到题板后，向外稍微补一点边，避免裁太紧。
-    "roi_padding": 12,
+    # ROI 边界微调：负值表示向内收，当前默认向内收 2 像素。
+    "roi_padding": -5,
 
     # 透视拉正后的输出尺寸。
     "perspective_width": 1280,
@@ -64,4 +64,25 @@ DEFAULT_ROI_TUNING_VALUES: dict[str, int | float] = {
     # OCR 输入图放大倍数。
     # 黑字偏细、OCR 容易漏笔画时可以适当提高；过大则会放大噪声。
     "scale_factor": 2.0,
+
+    # 表达式区域提取：搜索窗上下左右忽略比例。
+    "expression_search_top_ratio": 0.12,
+    "expression_search_bottom_ratio": 0.12,
+    "expression_search_left_ratio": 0.08,
+    "expression_search_right_ratio": 0.08,
+
+    # 表达式区域提取：Otsu 阈值微调偏移，正值会让更多像素进入前景。
+    "expression_otsu_bias": 0,
+
+    # 表达式区域提取：状态机进入 / 退出表达式区域时需要的黑像素占比。
+    "expression_enter_ratio": 0.01,
+    "expression_exit_ratio": 0.003,
+
+    # 表达式区域提取：为了过滤偶发噪点，需要连续多少行/列满足进入条件。
+    "expression_min_consecutive_rows": 3,
+    "expression_min_consecutive_cols": 3,
+
+    # 表达式区域提取：最终 bbox 的安全冗余。
+    "expression_bbox_padding_x": 10,
+    "expression_bbox_padding_y": 10,
 }
