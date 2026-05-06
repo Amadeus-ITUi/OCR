@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from PIL import Image
 
 from robocon_ocr.config import OCRConfig
-from robocon_ocr.result.expression import contains_unsupported_latex, normalize_ocr_text, validate_ocr_text
+from robocon_ocr.result.expression import normalize_ocr_text, validate_ocr_text
 
 
 @dataclass(slots=True)
@@ -46,13 +46,14 @@ class Pix2TexMathRecognizer:
 
         if "arguments" not in signature.parameters:
             return {}
-        if self.config.device.lower() == "cpu" and not self.config.model_path:
-            return {}
 
         namespace = argparse.Namespace()
+        setattr(namespace, "config", "settings/config.yaml")
+        setattr(namespace, "checkpoint", self.config.model_path or "checkpoints/weights.pth")
         setattr(namespace, "no_cuda", self.config.device.lower() == "cpu")
-        if self.config.model_path:
-            setattr(namespace, "checkpoint", self.config.model_path)
+        # pix2tex's optional image_resizer path is fragile for some camera-frame inputs
+        # and can raise PIL paste mode mismatches. Disable it for stability.
+        setattr(namespace, "no_resize", True)
         return {"arguments": namespace}
 
     @property
@@ -81,15 +82,6 @@ class Pix2TexMathRecognizer:
                 lines=[],
                 psm=None,
                 error="no text detected by OCR",
-            )
-
-        if self.config.strict_charset and contains_unsupported_latex(raw_text):
-            return OCRResult(
-                raw_text=raw_text,
-                confidence=0.0,
-                lines=[],
-                psm=None,
-                error="unsupported symbol outside arithmetic charset",
             )
 
         normalized = normalize_ocr_text(raw_text)

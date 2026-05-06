@@ -17,6 +17,24 @@ DEFAULT_ROI_TUNING_VALUES: dict[str, int | float] = {
     # 远距离、屏幕发灰、整体亮度偏低时，可以先尝试降到 185-195。
     "white_threshold": 200,
 
+    # 白色连通域主路径阈值：默认沿用 white_threshold。
+    "component_white_threshold": 200,
+
+    # 白色连通域最小面积占比。
+    "component_min_area_ratio": 0.03,
+
+    # 最多评估前几个最大白色连通域。
+    "component_max_candidates": 6,
+
+    # 连通域面积 / 最小外接矩形面积，下限越高越像“实心白题板”。
+    "component_fill_ratio_threshold": 0.72,
+
+    # 白色连通域成功后的外扩 padding。
+    "component_padding": 16,
+
+    # 角点搜索时的候选扩展边距。
+    "corner_search_margin": 18,
+
     # 边缘梯度阈值：越高越严格，只有更明显的边缘才会参与题板候选。
     # 远一点就检测不到，但题板边界肉眼很明显时，优先尝试降到 40-70。
     "edge_threshold": 80,

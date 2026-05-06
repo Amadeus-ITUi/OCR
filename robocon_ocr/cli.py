@@ -15,7 +15,7 @@ from robocon_ocr.camera_tuning import DEFAULT_CAMERA_TUNING
 from robocon_ocr.config import CameraConfig, PipelineConfig
 from robocon_ocr.image_recognition.pix2tex_recognizer import OCRResult, Pix2TexMathRecognizer
 from robocon_ocr.image_recognition.preprocess import PreprocessResult, ROIDebugInfo, prepare_image_for_ocr, save_debug_images
-from robocon_ocr.pipeline import _select_best_result, run_pipeline
+from robocon_ocr.pipeline import _recognize_with_fallback_variants, _select_best_result, run_pipeline
 from robocon_ocr.result.expression import ParsedExpression
 from robocon_ocr.result.reporter import PipelineRecord, summarize
 from robocon_ocr.vision_capture.usb_camera import USBCameraCapture
@@ -286,11 +286,17 @@ def _format_roi_debug_lines(roi_debug: ROIDebugInfo) -> list[str]:
     return [
         f"ROI: {roi_debug.roi_found}",
         f"Reason: {reason}",
+        f"Source: {roi_debug.best_candidate_source}",
         f"Type: {candidate_label}",
         f"Area: {fmt(roi_debug.best_candidate_area_ratio)} / {fmt(roi_debug.min_area_ratio_threshold)}",
+        f"CompArea: {fmt(roi_debug.best_candidate_component_area_ratio)}",
+        f"Fill: {fmt(roi_debug.best_candidate_rect_fill_ratio)}",
         f"Edge: {fmt(roi_debug.best_candidate_edge_strength, 1)} / {fmt(roi_debug.edge_threshold, 1)}",
         f"Ratio: {fmt(roi_debug.best_candidate_ratio)}",
         f"Err: {fmt(roi_debug.best_candidate_ratio_error)}",
+        f"Corner: {roi_debug.corner_found}",
+        f"CompCnt: {roi_debug.component_count}",
+        f"CompRank: {fmt(roi_debug.component_rank, 0)}",
         tolerance_label,
         f"WhiteThr: {fmt(roi_debug.white_threshold, 0)}",
         f"Cand: {roi_debug.candidate_count}",
@@ -446,7 +452,9 @@ def _show_debug_windows(display: DisplayState, window_scale: float) -> bool:
         return key not in {27, ord("q"), ord("Q")}
     except cv2.error as exc:
         raise RuntimeError(
-            "当前 OpenCV 构建不支持窗口显示。请安装带 GUI 的 `opencv-python`，不要使用 headless 版本。"
+            "当前 OpenCV 构建不支持窗口显示。你的环境里很可能装了 `opencv-python-headless`。"
+            "请先卸载 `opencv-python-headless`，再重装带 GUI 的 `opencv-python`；"
+            "如果只是想跑识别，不开窗口，可以去掉 `--show-window`。"
         ) from exc
 
 
@@ -497,7 +505,7 @@ def _process_camera_frame(
         record = _empty_camera_record(f"camera_{args.device_index}_{frame_index:06d}.png", preprocess_result)
         return record, preprocess_result, image_rgb, (time.perf_counter() - started_at) * 1000.0
 
-    ocr_candidates = recognizer.recognize_candidates(preprocess_result.rectified)
+    ocr_candidates = _recognize_with_fallback_variants(recognizer, preprocess_result)
     ocr_result, parsed = _select_best_result(ocr_candidates)
     record = PipelineRecord(
         image_name=f"camera_{args.device_index}_{frame_index:06d}.png",

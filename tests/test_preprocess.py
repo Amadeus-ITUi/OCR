@@ -31,6 +31,9 @@ def test_preprocess_config_defaults_come_from_roi_tuning():
     config = PreprocessConfig()
 
     assert config.white_threshold == DEFAULT_ROI_TUNING_VALUES["white_threshold"]
+    assert config.component_white_threshold == DEFAULT_ROI_TUNING_VALUES["component_white_threshold"]
+    assert config.component_min_area_ratio == DEFAULT_ROI_TUNING_VALUES["component_min_area_ratio"]
+    assert config.component_fill_ratio_threshold == DEFAULT_ROI_TUNING_VALUES["component_fill_ratio_threshold"]
     assert config.edge_threshold == DEFAULT_ROI_TUNING_VALUES["edge_threshold"]
     assert config.min_roi_area_ratio == DEFAULT_ROI_TUNING_VALUES["min_roi_area_ratio"]
     assert config.rectangle_ratio_tolerance == DEFAULT_ROI_TUNING_VALUES["rectangle_ratio_tolerance"]
@@ -47,6 +50,7 @@ def test_prepare_image_for_ocr_detects_perspective_quad():
     assert result.rectified.width == 1280
     assert result.rectified.height == 720
     assert result.roi_debug.best_candidate_type in {"rectangle", "quadrilateral"}
+    assert result.roi_debug.best_candidate_source in {"component", "contour_fallback"}
     assert result.roi_debug.failure_reason is None
     assert result.board_binary.mode == "L"
     assert result.prepared.mode == "L"
@@ -77,4 +81,18 @@ def test_prepare_image_for_ocr_reports_missing_roi():
         "rectangle ratio mismatch",
         "quadrilateral ratio mismatch",
         "no valid roi after filtering",
+        "component area below threshold",
+        "component fill ratio too low",
+        "component aspect mismatch",
+        "component corners not stable",
     }
+
+
+def test_prepare_image_for_ocr_prefers_component_source_for_clear_white_board():
+    image = _create_board_image()
+
+    result = prepare_image_for_ocr(image, PreprocessConfig())
+
+    assert result.roi_found is True
+    assert result.roi_debug.best_candidate_source == "component"
+    assert result.roi_debug.component_count >= 1

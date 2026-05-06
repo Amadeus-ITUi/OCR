@@ -13,11 +13,17 @@ from robocon_ocr.config import PreprocessConfig
 class ROIDebugInfo:
     roi_found: bool
     failure_reason: str | None
+    best_candidate_source: str
     best_candidate_type: str
     best_candidate_area_ratio: float | None
+    best_candidate_component_area_ratio: float | None
+    best_candidate_rect_fill_ratio: float | None
     best_candidate_edge_strength: float | None
     best_candidate_ratio: float | None
     best_candidate_ratio_error: float | None
+    component_count: int
+    component_rank: int | None
+    corner_found: bool
     min_area_ratio_threshold: float
     edge_threshold: float
     rectangle_ratio_tolerance: float
@@ -39,12 +45,17 @@ class PreprocessResult:
 
 @dataclass(slots=True)
 class _CandidateMetrics:
+    source: str
     candidate_type: str
     area_ratio: float
+    component_area_ratio: float | None
+    rect_fill_ratio: float | None
     edge_strength: float
     ratio: float | None
     ratio_error: float | None
     score: float
+    rank: int | None = None
+    corner_found: bool = False
     quad: np.ndarray | None = None
 
 
@@ -126,11 +137,17 @@ def _build_fallback_result(original: Image.Image, config: PreprocessConfig) -> P
     roi_debug = ROIDebugInfo(
         roi_found=False,
         failure_reason="no contour candidate",
+        best_candidate_source="none",
         best_candidate_type="none",
         best_candidate_area_ratio=None,
+        best_candidate_component_area_ratio=None,
+        best_candidate_rect_fill_ratio=None,
         best_candidate_edge_strength=None,
         best_candidate_ratio=None,
         best_candidate_ratio_error=None,
+        component_count=0,
+        component_rank=None,
+        corner_found=False,
         min_area_ratio_threshold=config.min_roi_area_ratio,
         edge_threshold=float(config.edge_threshold),
         rectangle_ratio_tolerance=config.rectangle_ratio_tolerance,
@@ -160,6 +177,16 @@ def _build_board_binary(gray: np.ndarray, gradient_u8: np.ndarray, config: Prepr
     return merged
 
 
+def _build_bright_mask(gray: np.ndarray, config: PreprocessConfig) -> np.ndarray:
+    cv2 = _import_cv2()
+    _, bright_mask = cv2.threshold(gray, config.component_white_threshold, 255, cv2.THRESH_BINARY)
+    kernel_close = np.ones((7, 7), np.uint8)
+    kernel_open = np.ones((5, 5), np.uint8)
+    bright_mask = cv2.morphologyEx(bright_mask, cv2.MORPH_CLOSE, kernel_close, iterations=2)
+    bright_mask = cv2.morphologyEx(bright_mask, cv2.MORPH_OPEN, kernel_open, iterations=1)
+    return bright_mask
+
+
 def _diagnostic_score(area_ratio: float, min_area_ratio: float, edge_strength: float, edge_threshold: float, ratio_error: float | None, tolerance: float | None) -> float:
     area_part = min(area_ratio / max(min_area_ratio, 1e-6), 1.5)
     edge_part = min(edge_strength / max(edge_threshold, 1e-6), 1.5)
@@ -170,15 +197,134 @@ def _diagnostic_score(area_ratio: float, min_area_ratio: float, edge_strength: f
     return area_part + edge_part + ratio_part
 
 
+def _component_score(area_ratio: float, fill_ratio: float, ratio_error: float, edge_strength: float, edge_threshold: float, corner_found: bool) -> float:
+    area_part = area_ratio * 3.0
+    fill_part = fill_ratio * 1.8
+    ratio_part = max(0.0, 1.0 - ratio_error)
+    edge_part = min(edge_strength / max(edge_threshold, 1e-6), 1.2)
+    corner_part = 0.35 if corner_found else 0.0
+    return area_part + fill_part + ratio_part + edge_part + corner_part
+
+
+def _contour_edge_strength(gray: np.ndarray, gradient_u8: np.ndarray, contour: np.ndarray) -> float:
+    cv2 = _import_cv2()
+    contour_mask = np.zeros_like(gray)
+    cv2.drawContours(contour_mask, [contour], -1, 255, thickness=2)
+    return float(cv2.mean(gradient_u8, mask=contour_mask)[0])
+
+
+def _component_edge_strength(gradient_u8: np.ndarray, mask: np.ndarray) -> float:
+    cv2 = _import_cv2()
+    return float(cv2.mean(gradient_u8, mask=mask)[0])
+
+
+def _candidate_from_rect(
+    rect,
+    area_ratio: float,
+    component_area_ratio: float | None,
+    rect_fill_ratio: float | None,
+    edge_strength: float,
+    config: PreprocessConfig,
+    source: str,
+    rank: int | None = None,
+    corner_found: bool = False,
+) -> _CandidateMetrics:
+    cv2 = _import_cv2()
+    rect_w, rect_h = rect[1]
+    rect_ratio = max(rect_w, rect_h) / max(min(rect_w, rect_h), 1.0)
+    rect_error = _ratio_error(rect_ratio, config.target_aspect_ratio)
+    score = (
+        _component_score(
+            area_ratio,
+            rect_fill_ratio if rect_fill_ratio is not None else 0.0,
+            rect_error,
+            edge_strength,
+            float(config.edge_threshold),
+            corner_found,
+        )
+        if source == "component"
+        else _diagnostic_score(
+            area_ratio,
+            config.min_roi_area_ratio,
+            edge_strength,
+            float(config.edge_threshold),
+            rect_error,
+            config.rectangle_ratio_tolerance,
+        )
+    )
+    return _CandidateMetrics(
+        source=source,
+        candidate_type="rectangle",
+        area_ratio=area_ratio,
+        component_area_ratio=component_area_ratio,
+        rect_fill_ratio=rect_fill_ratio,
+        edge_strength=edge_strength,
+        ratio=rect_ratio,
+        ratio_error=rect_error,
+        score=score,
+        rank=rank,
+        corner_found=corner_found,
+        quad=cv2.boxPoints(rect),
+    )
+
+
+def _candidate_from_quad(
+    quad: np.ndarray,
+    area_ratio: float,
+    component_area_ratio: float | None,
+    rect_fill_ratio: float | None,
+    edge_strength: float,
+    config: PreprocessConfig,
+    source: str,
+    rank: int | None = None,
+) -> _CandidateMetrics:
+    quad_ratio = _quad_aspect_ratio(quad)
+    quad_error = _ratio_error(quad_ratio, config.target_aspect_ratio)
+    score = (
+        _component_score(
+            area_ratio,
+            rect_fill_ratio if rect_fill_ratio is not None else 0.0,
+            quad_error,
+            edge_strength,
+            float(config.edge_threshold),
+            True,
+        )
+        if source == "component"
+        else _diagnostic_score(
+            area_ratio,
+            config.min_roi_area_ratio,
+            edge_strength,
+            float(config.edge_threshold),
+            quad_error,
+            config.quadrilateral_ratio_tolerance,
+        )
+    )
+    return _CandidateMetrics(
+        source=source,
+        candidate_type="quadrilateral",
+        area_ratio=area_ratio,
+        component_area_ratio=component_area_ratio,
+        rect_fill_ratio=rect_fill_ratio,
+        edge_strength=edge_strength,
+        ratio=quad_ratio,
+        ratio_error=quad_error,
+        score=score,
+        rank=rank,
+        corner_found=True,
+        quad=quad,
+    )
+
+
 def _build_roi_debug(
     config: PreprocessConfig,
     candidate_count: int,
+    component_count: int,
     best_candidate: _CandidateMetrics | None,
     roi_found: bool,
 ) -> ROIDebugInfo:
     failure_reason: str | None = None
     if not roi_found:
-        if candidate_count == 0 or best_candidate is None:
+        if candidate_count == 0 and component_count == 0 or best_candidate is None:
             failure_reason = "no contour candidate"
     if best_candidate is None:
         if failure_reason is None and not roi_found:
@@ -186,11 +332,17 @@ def _build_roi_debug(
         return ROIDebugInfo(
             roi_found=roi_found,
             failure_reason=failure_reason,
+            best_candidate_source="none",
             best_candidate_type="none",
             best_candidate_area_ratio=None,
+            best_candidate_component_area_ratio=None,
+            best_candidate_rect_fill_ratio=None,
             best_candidate_edge_strength=None,
             best_candidate_ratio=None,
             best_candidate_ratio_error=None,
+            component_count=component_count,
+            component_rank=None,
+            corner_found=False,
             min_area_ratio_threshold=config.min_roi_area_ratio,
             edge_threshold=float(config.edge_threshold),
             rectangle_ratio_tolerance=config.rectangle_ratio_tolerance,
@@ -200,25 +352,43 @@ def _build_roi_debug(
         )
 
     if not roi_found:
-        if best_candidate.area_ratio < config.min_roi_area_ratio:
-            failure_reason = "area below threshold"
-        elif best_candidate.edge_strength < float(config.edge_threshold):
-            failure_reason = "edge too weak"
-        elif best_candidate.candidate_type == "rectangle" and (best_candidate.ratio_error is None or best_candidate.ratio_error > config.rectangle_ratio_tolerance):
-            failure_reason = "rectangle ratio mismatch"
-        elif best_candidate.candidate_type == "quadrilateral" and (best_candidate.ratio_error is None or best_candidate.ratio_error > config.quadrilateral_ratio_tolerance):
-            failure_reason = "quadrilateral ratio mismatch"
+        if best_candidate.source == "component":
+            if best_candidate.component_area_ratio is not None and best_candidate.component_area_ratio < config.component_min_area_ratio:
+                failure_reason = "component area below threshold"
+            elif best_candidate.rect_fill_ratio is not None and best_candidate.rect_fill_ratio < config.component_fill_ratio_threshold:
+                failure_reason = "component fill ratio too low"
+            elif best_candidate.ratio_error is None or best_candidate.ratio_error > config.rectangle_ratio_tolerance:
+                failure_reason = "component aspect mismatch"
+            elif not best_candidate.corner_found:
+                failure_reason = "component corners not stable"
+            else:
+                failure_reason = "no valid roi after filtering"
         else:
-            failure_reason = "no valid roi after filtering"
+            if best_candidate.area_ratio < config.min_roi_area_ratio:
+                failure_reason = "area below threshold"
+            elif best_candidate.edge_strength < float(config.edge_threshold):
+                failure_reason = "edge too weak"
+            elif best_candidate.candidate_type == "rectangle" and (best_candidate.ratio_error is None or best_candidate.ratio_error > config.rectangle_ratio_tolerance):
+                failure_reason = "rectangle ratio mismatch"
+            elif best_candidate.candidate_type == "quadrilateral" and (best_candidate.ratio_error is None or best_candidate.ratio_error > config.quadrilateral_ratio_tolerance):
+                failure_reason = "quadrilateral ratio mismatch"
+            else:
+                failure_reason = "no valid roi after filtering"
 
     return ROIDebugInfo(
         roi_found=roi_found,
         failure_reason=failure_reason,
+        best_candidate_source=best_candidate.source,
         best_candidate_type=best_candidate.candidate_type,
         best_candidate_area_ratio=best_candidate.area_ratio,
+        best_candidate_component_area_ratio=best_candidate.component_area_ratio,
+        best_candidate_rect_fill_ratio=best_candidate.rect_fill_ratio,
         best_candidate_edge_strength=best_candidate.edge_strength,
         best_candidate_ratio=best_candidate.ratio,
         best_candidate_ratio_error=best_candidate.ratio_error,
+        component_count=component_count,
+        component_rank=best_candidate.rank,
+        corner_found=best_candidate.corner_found,
         min_area_ratio_threshold=config.min_roi_area_ratio,
         edge_threshold=float(config.edge_threshold),
         rectangle_ratio_tolerance=config.rectangle_ratio_tolerance,
@@ -228,21 +398,104 @@ def _build_roi_debug(
     )
 
 
-def _find_best_quad(image: Image.Image, config: PreprocessConfig) -> tuple[np.ndarray | None, Image.Image, ROIDebugInfo]:
+def _find_best_component_quad(
+    gray: np.ndarray,
+    gradient_u8: np.ndarray,
+    bright_mask: np.ndarray,
+    config: PreprocessConfig,
+) -> tuple[np.ndarray | None, _CandidateMetrics | None, int]:
     cv2 = _import_cv2()
-    rgb = np.asarray(image.convert("RGB"))
-    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    grad_x = cv2.Sobel(blurred, cv2.CV_32F, 1, 0, ksize=3)
-    grad_y = cv2.Sobel(blurred, cv2.CV_32F, 0, 1, ksize=3)
-    gradient = cv2.magnitude(grad_x, grad_y)
-    gradient_u8 = np.clip(gradient, 0, 255).astype(np.uint8)
-    merged = _build_board_binary(blurred, gradient_u8, config)
-    board_binary = Image.fromarray(merged, mode="L")
-    contours, _ = cv2.findContours(merged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    num_labels, labels, stats, _centroids = cv2.connectedComponentsWithStats(bright_mask, connectivity=8)
+    frame_area = float(gray.shape[0] * gray.shape[1])
+    min_component_area = frame_area * config.component_min_area_ratio
+    ranked_labels: list[tuple[int, int]] = []
+    for label in range(1, num_labels):
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        ranked_labels.append((area, label))
+    ranked_labels.sort(reverse=True)
 
-    min_area = image.width * image.height * config.min_roi_area_ratio
-    frame_area = float(image.width * image.height)
+    best_score = float("-inf")
+    best_quad: np.ndarray | None = None
+    best_diagnostic_candidate: _CandidateMetrics | None = None
+    best_valid_candidate: _CandidateMetrics | None = None
+
+    for rank, (_area, label) in enumerate(ranked_labels[: config.component_max_candidates], start=1):
+        component_mask = np.where(labels == label, 255, 0).astype(np.uint8)
+        contour_list, _ = cv2.findContours(component_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contour_list:
+            continue
+        contour = max(contour_list, key=cv2.contourArea)
+        area = cv2.contourArea(contour)
+        area_ratio = area / max(frame_area, 1.0)
+        edge_strength = _component_edge_strength(gradient_u8, component_mask)
+        rect = cv2.minAreaRect(contour)
+        rect_w, rect_h = rect[1]
+        rect_area = max(rect_w * rect_h, 1.0)
+        rect_fill_ratio = float(area / rect_area)
+        rect_diag = _candidate_from_rect(
+            rect=rect,
+            area_ratio=area_ratio,
+            component_area_ratio=area_ratio,
+            rect_fill_ratio=rect_fill_ratio,
+            edge_strength=edge_strength,
+            config=config,
+            source="component",
+            rank=rank,
+            corner_found=False,
+        )
+        if best_diagnostic_candidate is None or rect_diag.score > best_diagnostic_candidate.score:
+            best_diagnostic_candidate = rect_diag
+
+        perimeter = cv2.arcLength(contour, True)
+        if perimeter <= 0:
+            continue
+        epsilon = 0.02 * perimeter
+        approx = cv2.approxPolyDP(contour, epsilon, True)
+        if area < min_component_area:
+            continue
+        if rect_fill_ratio < config.component_fill_ratio_threshold:
+            continue
+        if rect_diag.ratio_error is None or rect_diag.ratio_error > config.rectangle_ratio_tolerance:
+            continue
+        if len(approx) != 4:
+            if rect_diag.score > best_score:
+                best_score = rect_diag.score
+                best_quad = rect_diag.quad
+                best_valid_candidate = rect_diag
+            continue
+        quad = approx.reshape(4, 2).astype(np.float32)
+        quad_diag = _candidate_from_quad(
+            quad=quad,
+            area_ratio=area_ratio,
+            component_area_ratio=area_ratio,
+            rect_fill_ratio=rect_fill_ratio,
+            edge_strength=edge_strength,
+            config=config,
+            source="component",
+            rank=rank,
+        )
+        if best_diagnostic_candidate is None or quad_diag.score > best_diagnostic_candidate.score:
+            best_diagnostic_candidate = quad_diag
+        if quad_diag.ratio_error is None or quad_diag.ratio_error > config.quadrilateral_ratio_tolerance:
+            continue
+        if quad_diag.score > best_score:
+            best_score = quad_diag.score
+            best_quad = quad_diag.quad
+            best_valid_candidate = quad_diag
+
+    return best_quad, best_valid_candidate or best_diagnostic_candidate, min(len(ranked_labels), config.component_max_candidates)
+
+
+def _find_best_contour_quad(
+    gray: np.ndarray,
+    gradient_u8: np.ndarray,
+    merged: np.ndarray,
+    config: PreprocessConfig,
+) -> tuple[np.ndarray | None, _CandidateMetrics | None, int]:
+    cv2 = _import_cv2()
+    contours, _ = cv2.findContours(merged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    frame_area = float(gray.shape[0] * gray.shape[1])
+    min_area = frame_area * config.min_roi_area_ratio
     best_score = float("-inf")
     best_quad: np.ndarray | None = None
     best_valid_candidate: _CandidateMetrics | None = None
@@ -255,105 +508,107 @@ def _find_best_quad(image: Image.Image, config: PreprocessConfig) -> tuple[np.nd
             continue
         epsilon = 0.02 * perimeter
         approx = cv2.approxPolyDP(contour, epsilon, True)
-        contour_mask = np.zeros_like(gray)
-        cv2.drawContours(contour_mask, [contour], -1, 255, thickness=2)
-        edge_strength = float(cv2.mean(gradient_u8, mask=contour_mask)[0])
+        edge_strength = _contour_edge_strength(gray, gradient_u8, contour)
         area_ratio = area / max(frame_area, 1.0)
 
         rect = cv2.minAreaRect(contour)
-        (rect_w, rect_h) = rect[1]
-        rect_ratio = max(rect_w, rect_h) / max(min(rect_w, rect_h), 1.0)
-        rect_error = _ratio_error(rect_ratio, config.target_aspect_ratio)
-        rect_diag = _CandidateMetrics(
-            candidate_type="rectangle",
+        rect_diag = _candidate_from_rect(
+            rect=rect,
             area_ratio=area_ratio,
+            component_area_ratio=None,
+            rect_fill_ratio=None,
             edge_strength=edge_strength,
-            ratio=rect_ratio,
-            ratio_error=rect_error,
-            score=_diagnostic_score(
-                area_ratio,
-                config.min_roi_area_ratio,
-                edge_strength,
-                float(config.edge_threshold),
-                rect_error,
-                config.rectangle_ratio_tolerance,
-            ),
-            quad=cv2.boxPoints(rect),
+            config=config,
+            source="contour_fallback",
         )
         if best_diagnostic_candidate is None or rect_diag.score > best_diagnostic_candidate.score:
             best_diagnostic_candidate = rect_diag
-
-        if area >= min_area and edge_strength >= float(config.edge_threshold) and rect_error <= config.rectangle_ratio_tolerance:
-            quad = cv2.boxPoints(rect)
-            score = _score_candidate(area, edge_strength, rect_error, frame_area)
+        if area >= min_area and edge_strength >= float(config.edge_threshold) and rect_diag.ratio_error is not None and rect_diag.ratio_error <= config.rectangle_ratio_tolerance:
+            score = _score_candidate(area, edge_strength, rect_diag.ratio_error, frame_area)
             if score > best_score:
+                rect_diag.score = score
                 best_score = score
-                best_quad = quad
-                best_valid_candidate = _CandidateMetrics(
-                    candidate_type="rectangle",
-                    area_ratio=area_ratio,
-                    edge_strength=edge_strength,
-                    ratio=rect_ratio,
-                    ratio_error=rect_error,
-                    score=score,
-                    quad=quad,
-                )
+                best_quad = rect_diag.quad
+                best_valid_candidate = rect_diag
 
         if len(approx) != 4:
             continue
         quad = approx.reshape(4, 2).astype(np.float32)
-        quad_ratio = _quad_aspect_ratio(quad)
-        quad_error = _ratio_error(quad_ratio, config.target_aspect_ratio)
-        quad_diag = _CandidateMetrics(
-            candidate_type="quadrilateral",
-            area_ratio=area_ratio,
-            edge_strength=edge_strength,
-            ratio=quad_ratio,
-            ratio_error=quad_error,
-            score=_diagnostic_score(
-                area_ratio,
-                config.min_roi_area_ratio,
-                edge_strength,
-                float(config.edge_threshold),
-                quad_error,
-                config.quadrilateral_ratio_tolerance,
-            ),
+        quad_diag = _candidate_from_quad(
             quad=quad,
+            area_ratio=area_ratio,
+            component_area_ratio=None,
+            rect_fill_ratio=None,
+            edge_strength=edge_strength,
+            config=config,
+            source="contour_fallback",
         )
         if best_diagnostic_candidate is None or quad_diag.score > best_diagnostic_candidate.score:
             best_diagnostic_candidate = quad_diag
-
-        if area < min_area or edge_strength < float(config.edge_threshold) or quad_error > config.quadrilateral_ratio_tolerance:
+        if area < min_area or edge_strength < float(config.edge_threshold) or quad_diag.ratio_error is None or quad_diag.ratio_error > config.quadrilateral_ratio_tolerance:
             continue
-
-        score = _score_candidate(area, edge_strength, quad_error, frame_area)
+        score = _score_candidate(area, edge_strength, quad_diag.ratio_error, frame_area)
         if score > best_score:
+            quad_diag.score = score
             best_score = score
-            best_quad = quad
-            best_valid_candidate = _CandidateMetrics(
-                candidate_type="quadrilateral",
-                area_ratio=area_ratio,
-                edge_strength=edge_strength,
-                ratio=quad_ratio,
-                ratio_error=quad_error,
-                score=score,
-                quad=quad,
-            )
+            best_quad = quad_diag.quad
+            best_valid_candidate = quad_diag
 
-    if best_quad is None:
+    return best_quad, best_valid_candidate or best_diagnostic_candidate, len(contours)
+
+
+def _find_best_quad(image: Image.Image, config: PreprocessConfig) -> tuple[np.ndarray | None, Image.Image, ROIDebugInfo]:
+    cv2 = _import_cv2()
+    rgb = np.asarray(image.convert("RGB"))
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    grad_x = cv2.Sobel(blurred, cv2.CV_32F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(blurred, cv2.CV_32F, 0, 1, ksize=3)
+    gradient = cv2.magnitude(grad_x, grad_y)
+    gradient_u8 = np.clip(gradient, 0, 255).astype(np.uint8)
+    bright_mask = _build_bright_mask(blurred, config)
+    merged = _build_board_binary(blurred, gradient_u8, config)
+    board_binary = Image.fromarray(merged, mode="L")
+
+    component_quad, component_candidate, component_count = _find_best_component_quad(
+        gray=gray,
+        gradient_u8=gradient_u8,
+        bright_mask=bright_mask,
+        config=config,
+    )
+    if component_quad is not None and component_candidate is not None:
+        ordered = _order_quad(component_quad)
+        expanded = _expand_quad(ordered, config.component_padding, image.width, image.height)
+        return _order_quad(expanded), board_binary, _build_roi_debug(
+            config=config,
+            candidate_count=0,
+            component_count=component_count,
+            best_candidate=component_candidate,
+            roi_found=True,
+        )
+
+    contour_quad, contour_candidate, contour_count = _find_best_contour_quad(
+        gray=gray,
+        gradient_u8=gradient_u8,
+        merged=merged,
+        config=config,
+    )
+    if contour_quad is None:
         return None, board_binary, _build_roi_debug(
             config=config,
-            candidate_count=len(contours),
-            best_candidate=best_diagnostic_candidate,
+            candidate_count=contour_count,
+            component_count=component_count,
+            best_candidate=component_candidate or contour_candidate,
             roi_found=False,
         )
 
-    ordered = _order_quad(best_quad)
+    ordered = _order_quad(contour_quad)
     expanded = _expand_quad(ordered, config.roi_padding, image.width, image.height)
     return _order_quad(expanded), board_binary, _build_roi_debug(
         config=config,
-        candidate_count=len(contours),
-        best_candidate=best_valid_candidate or best_diagnostic_candidate,
+        candidate_count=contour_count,
+        component_count=component_count,
+        best_candidate=contour_candidate or component_candidate,
         roi_found=True,
     )
 

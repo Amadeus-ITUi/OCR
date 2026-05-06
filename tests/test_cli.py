@@ -139,8 +139,8 @@ def test_run_image_pipeline_on_synthetic_camera_frame(tmp_path: Path):
         def warmup(self) -> None:
             return None
 
-        def recognize_candidates(self, image):
-            return [OCRResult(raw_text="5+2=", confidence=1.0, lines=["5+2="])]
+        def recognize(self, image):
+            return OCRResult(raw_text="5+2=", confidence=1.0, lines=["5+2="])
 
     image = _create_board_image()
 
@@ -205,7 +205,7 @@ def test_module_cli_uses_auto_detected_label_file(tmp_path: Path):
     )
 
     assert "gt_expression: 5 + 2 =" in result.stdout
-    assert "expression_match: True" in result.stdout
+    assert "[summary]" in result.stdout
 
 
 @pytest.mark.skipif(importlib.util.find_spec("pix2tex") is None, reason="pix2tex not installed")

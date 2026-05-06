@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from PIL import ImageOps
 from PIL import Image
 
 from robocon_ocr.config import PipelineConfig
@@ -60,7 +61,7 @@ def _record_from_preprocess(
     if not preprocess_result.roi_found:
         ocr_result, parsed = _empty_record_result()
     else:
-        ocr_candidates = recognizer.recognize_candidates(preprocess_result.rectified)
+        ocr_candidates = _recognize_with_fallback_variants(recognizer, preprocess_result)
         ocr_result, parsed = _select_best_result(ocr_candidates)
 
     return PipelineRecord(
@@ -71,6 +72,35 @@ def _record_from_preprocess(
         roi_found=preprocess_result.roi_found,
         roi_quad=preprocess_result.roi_quad,
     )
+
+
+def _recognize_with_fallback_variants(
+    recognizer: Pix2TexMathRecognizer,
+    preprocess_result: PreprocessResult,
+) -> list[OCRResult]:
+    primary = recognizer.recognize(preprocess_result.rectified)
+    candidates = [primary]
+    primary_parsed = parse_expression(primary.raw_text)
+    short_expression = primary_parsed.is_valid and len(primary_parsed.expression) <= 6
+    if primary.error is None and primary_parsed.is_valid and not short_expression:
+        return candidates
+
+    fallback_images = [
+        ("gray", preprocess_result.rectified.convert("L"), 1.03 if short_expression else 1.0),
+        ("prepared", preprocess_result.prepared, 1.02 if short_expression else 1.0),
+        ("invert_prepared", ImageOps.invert(preprocess_result.prepared.convert("L")), 1.01 if short_expression else 1.0),
+    ]
+    seen_raw = {primary.raw_text}
+    if short_expression:
+        primary.confidence = min(primary.confidence, 1.0)
+    for _name, image, confidence_boost in fallback_images:
+        candidate = recognizer.recognize(image)
+        if candidate.raw_text in seen_raw and candidate.error == primary.error:
+            continue
+        candidate.confidence *= confidence_boost
+        candidates.append(candidate)
+        seen_raw.add(candidate.raw_text)
+    return candidates
 
 
 def run_pipeline(config: PipelineConfig) -> list[PipelineRecord]:

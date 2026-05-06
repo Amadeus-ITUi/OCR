@@ -115,6 +115,16 @@ python3 -m robocon_ocr camera \
   --show-window
 ```
 
+如果 `--show-window` 报 OpenCV `cv2.imshow` 不支持，一般是环境里装成了 `opencv-python-headless`。
+可用下面这组命令修复：
+
+```bash
+pip uninstall -y opencv-python-headless opencv-python
+pip install opencv-python==4.13.0.92
+```
+
+如果你当前只想先跑识别，也可以先去掉 `--show-window`。
+
 默认只在识别结果发生变化时打印新结果，按 `Ctrl+C` 停止。
 实时模式现在是“采集线程持续抓图 + OCR 线程后台处理最新帧”的异步模型。
 默认摄像头参数是 `device-index=2`、`1280x720`、`30fps`、`MJPG`、`interval-ms=0`。

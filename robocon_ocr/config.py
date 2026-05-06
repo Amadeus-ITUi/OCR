@@ -17,6 +17,12 @@ class OCRConfig:
 @dataclass(slots=True)
 class PreprocessConfig:
     white_threshold: int = int(DEFAULT_ROI_TUNING_VALUES["white_threshold"])
+    component_white_threshold: int = int(DEFAULT_ROI_TUNING_VALUES["component_white_threshold"])
+    component_min_area_ratio: float = float(DEFAULT_ROI_TUNING_VALUES["component_min_area_ratio"])
+    component_max_candidates: int = int(DEFAULT_ROI_TUNING_VALUES["component_max_candidates"])
+    component_fill_ratio_threshold: float = float(DEFAULT_ROI_TUNING_VALUES["component_fill_ratio_threshold"])
+    component_padding: int = int(DEFAULT_ROI_TUNING_VALUES["component_padding"])
+    corner_search_margin: int = int(DEFAULT_ROI_TUNING_VALUES["corner_search_margin"])
     edge_threshold: int = int(DEFAULT_ROI_TUNING_VALUES["edge_threshold"])
     min_roi_area_ratio: float = float(DEFAULT_ROI_TUNING_VALUES["min_roi_area_ratio"])
     rectangularity_min: float = 0.82

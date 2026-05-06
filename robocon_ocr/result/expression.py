@@ -73,13 +73,13 @@ def normalize_ocr_text(text: str) -> str:
     for src, dst in SYMBOL_REPLACEMENTS.items():
         normalized = normalized.replace(src, dst)
     normalized = re.sub(r"\s+", "", normalized)
-    extracted = _extract_arithmetic_candidate(normalized)
+    extracted = extract_arithmetic_candidate(normalized)
     if extracted is not None:
         return extracted
     return normalized
 
 
-def _extract_arithmetic_candidate(text: str) -> str | None:
+def extract_arithmetic_candidate(text: str) -> str | None:
     candidates = re.findall(r"[0-9+\-×÷()=]+", text)
     if not candidates:
         return None
@@ -320,15 +320,18 @@ class ExpressionParser:
 
 
 def parse_expression(text: str) -> ParsedExpression:
-    if contains_unsupported_latex(text):
-        return ParsedExpression(
-            normalized_text=text.strip(),
-            expression="",
-            answer=None,
-            is_valid=False,
-            error="unsupported symbol outside arithmetic charset",
-        )
     normalized = normalize_ocr_text(text)
+    if contains_unsupported_latex(text):
+        extracted = extract_arithmetic_candidate(normalized)
+        if extracted is None:
+            return ParsedExpression(
+                normalized_text=text.strip(),
+                expression="",
+                answer=None,
+                is_valid=False,
+                error="unsupported symbol outside arithmetic charset",
+            )
+        normalized = extracted
     validation_error = validate_ocr_text(normalized)
     if validation_error is not None:
         return ParsedExpression(
