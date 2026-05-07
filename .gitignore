@@ -9,11 +9,17 @@ build/
 
 # Virtual environments
 .venv/
+.venv-paddle/
 venv/
 ENV/
 
 # VSCode
 .vscode/
+
+# Python tooling caches
+.pytest_cache/
+.paddlex/
+.cache/
 
 # Jupyter Notebook
 .ipynb_checkpoints/
@@ -28,6 +34,11 @@ Thumbs.db
 # Others
 *.swp
 *.swo
+
+# Local debug artifacts
+debug_outputs/**
+!debug_outputs/
+!debug_outputs/.gitkeep
 
 # Dataset (keep empty folder structure only)
 dataset/**
