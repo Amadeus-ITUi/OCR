@@ -44,11 +44,13 @@ class PreprocessConfig:
     expression_min_consecutive_cols: int = int(DEFAULT_ROI_TUNING_VALUES["expression_min_consecutive_cols"])
     expression_bbox_padding_x: int = int(DEFAULT_ROI_TUNING_VALUES["expression_bbox_padding_x"])
     expression_bbox_padding_y: int = int(DEFAULT_ROI_TUNING_VALUES["expression_bbox_padding_y"])
+    expression_bbox_expand_ratio_x: float = float(DEFAULT_ROI_TUNING_VALUES["expression_bbox_expand_ratio_x"])
+    expression_bbox_expand_ratio_y: float = float(DEFAULT_ROI_TUNING_VALUES["expression_bbox_expand_ratio_y"])
 
 
 @dataclass(slots=True)
 class CameraConfig:
-    device_index: int = 2
+    device_index: int = 0
     width: int = 1280
     height: int = 720
     fps: float = 30.0

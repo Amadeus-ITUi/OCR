@@ -66,10 +66,10 @@ DEFAULT_ROI_TUNING_VALUES: dict[str, int | float] = {
     "scale_factor": 2.0,
 
     # 表达式区域提取：搜索窗上下左右忽略比例。
-    "expression_search_top_ratio": 0.12,
-    "expression_search_bottom_ratio": 0.12,
-    "expression_search_left_ratio": 0.08,
-    "expression_search_right_ratio": 0.08,
+    "expression_search_top_ratio": 0.05,
+    "expression_search_bottom_ratio": 0.05,
+    "expression_search_left_ratio": 0.05,
+    "expression_search_right_ratio": 0.05,
 
     # 表达式区域提取：Otsu 阈值微调偏移，正值会让更多像素进入前景。
     "expression_otsu_bias": 0,
@@ -85,4 +85,9 @@ DEFAULT_ROI_TUNING_VALUES: dict[str, int | float] = {
     # 表达式区域提取：最终 bbox 的安全冗余。
     "expression_bbox_padding_x": 10,
     "expression_bbox_padding_y": 10,
+
+    # 表达式区域提取：在固定像素 padding 之外，再按最终 bbox 宽高做比例外扩。
+    # 0.10 表示左右各增加当前 bbox 宽度的 10%，上下各增加当前 bbox 高度的 10%。
+    "expression_bbox_expand_ratio_x": 0.05,
+    "expression_bbox_expand_ratio_y": 0.10,
 }

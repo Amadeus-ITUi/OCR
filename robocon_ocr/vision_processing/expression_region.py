@@ -13,6 +13,8 @@ _DYNAMIC_ENTER_SCALE = 0.18
 _DYNAMIC_EXIT_SCALE = 0.55
 _FRAME_RATIO_THRESHOLD = 0.75
 _FRAME_MIN_CONSECUTIVE = 2
+_FULL_WINDOW_REJECT_WIDTH_RATIO = 0.98
+_FULL_WINDOW_REJECT_HEIGHT_RATIO = 0.98
 
 
 @dataclass(slots=True)
@@ -161,6 +163,38 @@ def _clip_bbox(x0: int, y0: int, x1: int, y1: int, width: int, height: int) -> t
         max(0, min(x1, width)),
         max(0, min(y1, height)),
     )
+
+
+def _covers_almost_entire_window(
+    bbox: tuple[int, int, int, int],
+    effective_search_window: tuple[int, int, int, int],
+) -> bool:
+    x0, y0, x1, y1 = bbox
+    effective_left, effective_top, effective_right, effective_bottom = effective_search_window
+    bbox_width = max(0, x1 - x0)
+    bbox_height = max(0, y1 - y0)
+    window_width = max(1, effective_right - effective_left)
+    window_height = max(1, effective_bottom - effective_top)
+    return (
+        (bbox_width / window_width) >= _FULL_WINDOW_REJECT_WIDTH_RATIO
+        and (bbox_height / window_height) >= _FULL_WINDOW_REJECT_HEIGHT_RATIO
+    )
+
+
+def _expand_bbox_by_ratio(
+    bbox: tuple[int, int, int, int],
+    *,
+    expand_ratio_x: float,
+    expand_ratio_y: float,
+    width: int,
+    height: int,
+) -> tuple[int, int, int, int]:
+    x0, y0, x1, y1 = bbox
+    bbox_width = max(0, x1 - x0)
+    bbox_height = max(0, y1 - y0)
+    extra_x = int(round(bbox_width * max(0.0, float(expand_ratio_x))))
+    extra_y = int(round(bbox_height * max(0.0, float(expand_ratio_y))))
+    return _clip_bbox(x0 - extra_x, y0 - extra_y, x1 + extra_x, y1 + extra_y, width, height)
 
 
 def _apply_otsu(gray: np.ndarray, bias: int) -> tuple[float, np.ndarray]:
@@ -463,9 +497,15 @@ def extract_expression_region(image: Image.Image, config: PreprocessConfig) -> E
             ),
         )
 
-    bbox = (x0, y0, x1, y1)
+    bbox = _expand_bbox_by_ratio(
+        (x0, y0, x1, y1),
+        expand_ratio_x=config.expression_bbox_expand_ratio_x,
+        expand_ratio_y=config.expression_bbox_expand_ratio_y,
+        width=width,
+        height=height,
+    )
     cropped = image.crop(bbox)
-    if cropped.width >= (effective_right - effective_left) or cropped.height >= (effective_bottom - effective_top):
+    if _covers_almost_entire_window(bbox, effective_search_window):
         return _build_failure_result(
             image,
             "region too small",

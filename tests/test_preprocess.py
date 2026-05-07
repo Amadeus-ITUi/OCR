@@ -51,6 +51,8 @@ def test_preprocess_config_defaults_come_from_roi_tuning():
     assert config.expression_min_consecutive_cols == DEFAULT_ROI_TUNING_VALUES["expression_min_consecutive_cols"]
     assert config.expression_bbox_padding_x == DEFAULT_ROI_TUNING_VALUES["expression_bbox_padding_x"]
     assert config.expression_bbox_padding_y == DEFAULT_ROI_TUNING_VALUES["expression_bbox_padding_y"]
+    assert config.expression_bbox_expand_ratio_x == DEFAULT_ROI_TUNING_VALUES["expression_bbox_expand_ratio_x"]
+    assert config.expression_bbox_expand_ratio_y == DEFAULT_ROI_TUNING_VALUES["expression_bbox_expand_ratio_y"]
 
 
 def test_prepare_image_for_ocr_detects_perspective_quad():
@@ -135,6 +137,62 @@ def test_extract_expression_region_uses_otsu_on_blue_tinted_board():
     assert result.region_found is True
     assert result.otsu_threshold is not None
     assert result.bbox is not None
+    assert result.cropped_region is not None
+    assert result.cropped_region.width < image.width
+    assert result.cropped_region.height < image.height
+
+
+def test_extract_expression_region_expands_final_bbox_by_ratio():
+    image = Image.new("RGB", (1280, 720), (210, 235, 245))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((420, 300, 860, 360), fill="black")
+
+    no_expand = extract_expression_region(
+        image,
+        PreprocessConfig(
+            expression_bbox_padding_x=0,
+            expression_bbox_padding_y=0,
+            expression_bbox_expand_ratio_x=0.0,
+            expression_bbox_expand_ratio_y=0.0,
+        ),
+    )
+    expanded = extract_expression_region(
+        image,
+        PreprocessConfig(
+            expression_bbox_padding_x=0,
+            expression_bbox_padding_y=0,
+            expression_bbox_expand_ratio_x=0.10,
+            expression_bbox_expand_ratio_y=0.10,
+        ),
+    )
+
+    assert no_expand.region_found is True
+    assert expanded.region_found is True
+    assert no_expand.bbox is not None
+    assert expanded.bbox is not None
+    base_x0, base_y0, base_x1, base_y1 = no_expand.bbox
+    expanded_x0, expanded_y0, expanded_x1, expanded_y1 = expanded.bbox
+    assert expanded_x0 < base_x0
+    assert expanded_y0 < base_y0
+    assert expanded_x1 > base_x1
+    assert expanded_y1 > base_y1
+
+
+def test_extract_expression_region_keeps_long_expression_near_board_edges():
+    image = Image.new("RGB", (1280, 720), (210, 235, 245))
+    draw = ImageDraw.Draw(image)
+    for x0 in (105, 220, 335, 450, 565, 680, 795, 910, 1025, 1140):
+        draw.rectangle((x0, 290, x0 + 45, 380), fill="black")
+
+    result = extract_expression_region(image, PreprocessConfig())
+
+    assert result.region_found is True
+    assert result.failure_reason is None
+    assert result.bbox is not None
+    x0, y0, x1, y1 = result.bbox
+    assert x0 <= 105
+    assert x1 >= 1185
+    assert (y1 - y0) < 180
     assert result.cropped_region is not None
     assert result.cropped_region.width < image.width
     assert result.cropped_region.height < image.height
