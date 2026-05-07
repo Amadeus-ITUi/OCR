@@ -50,11 +50,28 @@ class Pix2TexMathRecognizer:
         namespace = argparse.Namespace()
         setattr(namespace, "config", "settings/config.yaml")
         setattr(namespace, "checkpoint", self.config.model_path or "checkpoints/weights.pth")
-        setattr(namespace, "no_cuda", self.config.device.lower() == "cpu")
+        setattr(namespace, "no_cuda", self._resolve_no_cuda())
         # pix2tex's optional image_resizer path is fragile for some camera-frame inputs
         # and can raise PIL paste mode mismatches. Disable it for stability.
         setattr(namespace, "no_resize", True)
         return {"arguments": namespace}
+
+    def _resolve_no_cuda(self, cuda_available: bool | None = None) -> bool:
+        requested = self.config.device.strip().lower()
+        if requested == "cpu":
+            return True
+        if requested in {"cuda", "gpu"}:
+            return False
+        if cuda_available is None:
+            cuda_available = self._is_cuda_available()
+        return not cuda_available
+
+    def _is_cuda_available(self) -> bool:
+        try:
+            import torch
+        except ModuleNotFoundError:
+            return False
+        return bool(torch.cuda.is_available())
 
     @property
     def engine(self):

@@ -8,7 +8,7 @@ from robocon_ocr.roi_tuning import DEFAULT_ROI_TUNING_VALUES
 
 @dataclass(slots=True)
 class OCRConfig:
-    device: str = "cpu"
+    device: str = "auto"
     model_path: str | None = None
     warmup: bool = True
     strict_charset: bool = True
