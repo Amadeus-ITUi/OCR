@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from robocon_ocr.image_recognition.dataset_source import LabelRecord
-from robocon_ocr.image_recognition.pix2tex_recognizer import OCRResult
+from robocon_ocr.image_recognition.base import OCRResult
 from robocon_ocr.result.expression import ParsedExpression, to_expression_only
 
 

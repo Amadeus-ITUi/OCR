@@ -8,7 +8,8 @@ from PIL import Image
 from PIL import ImageOps
 
 from robocon_ocr.config import OCRConfig, PipelineConfig, PreprocessConfig
-from robocon_ocr.image_recognition.pix2tex_recognizer import OCRResult, Pix2TexMathRecognizer
+from robocon_ocr.image_recognition.base import MathTextRecognizer, OCRResult
+from robocon_ocr.image_recognition.factory import create_recognizer
 from robocon_ocr.result.expression import ParsedExpression, parse_expression
 from robocon_ocr.result.reporter import PipelineRecord
 from robocon_ocr.vision_processing.board_detection import BoardDetectionResult
@@ -111,7 +112,7 @@ def _select_best_result(candidates) -> tuple:
 
 
 def recognize_with_fallback_variants(
-    recognizer: Pix2TexMathRecognizer,
+    recognizer: MathTextRecognizer,
     enhancement_result: EnhancementResult,
     expression_region_result: ExpressionRegionResult,
 ) -> list[OCRResult]:
@@ -119,6 +120,8 @@ def recognize_with_fallback_variants(
         return []
     primary = recognizer.recognize(enhancement_result.prepared_for_ocr.convert("RGB"))
     candidates = [primary]
+    if not getattr(recognizer, "supports_fallback_variants", True):
+        return candidates
     primary_parsed = parse_expression(primary.raw_text)
     short_expression = primary_parsed.is_valid and len(primary_parsed.expression) <= 6
     if primary.error is None and primary_parsed.is_valid and not short_expression:
@@ -274,13 +277,13 @@ class _SegmentationStage:
 class _OCRStage:
     name: StageName = "ocr"
 
-    def __init__(self, recognizer: Pix2TexMathRecognizer | None = None) -> None:
+    def __init__(self, recognizer: MathTextRecognizer | None = None) -> None:
         self._recognizer = recognizer
 
     def run(self, context: PipelineContext) -> PipelineContext:
         if context.expression_region is None or context.enhancement is None:
             return context
-        recognizer = self._recognizer or Pix2TexMathRecognizer(context.ocr_config)
+        recognizer = self._recognizer or create_recognizer(context.ocr_config)
         candidates = recognize_with_fallback_variants(recognizer, context.enhancement, context.expression_region)
         if not candidates:
             return context
@@ -296,6 +299,7 @@ class _OCRStage:
             self.name,
             preview,
             "OCR complete",
+            f"Backend: {best.backend if best else getattr(recognizer, 'backend_name', 'unknown')}",
             f"Candidates: {len(candidates)}",
             f"Best: {best.raw_text if best else '<empty>'}",
             f"Error: {stage_result.error or 'none'}",
@@ -340,7 +344,7 @@ def _should_stop(stage_name: StageName, stop_after: StageName | None) -> bool:
 def run_staged_pipeline(
     context: PipelineContext,
     stop_after: StageName | None = None,
-    recognizer: Pix2TexMathRecognizer | None = None,
+    recognizer: MathTextRecognizer | None = None,
 ) -> PipelineContext:
     stages = (
         _BoardDetectionStage(),
@@ -363,7 +367,7 @@ def run_dataset_pipeline_image(
     image: Image.Image,
     image_name: str,
     config: PipelineConfig,
-    recognizer: Pix2TexMathRecognizer | None = None,
+    recognizer: MathTextRecognizer | None = None,
 ) -> PipelineContext:
     context = PipelineContext(
         image_name=image_name,
@@ -379,7 +383,7 @@ def run_camera_pipeline_frame(
     frame: Image.Image,
     image_name: str,
     config: PipelineConfig,
-    recognizer: Pix2TexMathRecognizer | None = None,
+    recognizer: MathTextRecognizer | None = None,
 ) -> PipelineContext:
     context = PipelineContext(
         image_name=image_name,
@@ -395,18 +399,41 @@ def context_to_record(context: PipelineContext) -> PipelineRecord:
     board = context.board_detection
     roi_found = bool(board and board.roi_found)
     roi_quad = None if board is None else board.roi_quad
-    ocr_result = OCRResult(raw_text="", confidence=0.0, lines=[], psm=None, error="roi not found")
+    ocr_result = OCRResult(
+        raw_text="",
+        confidence=0.0,
+        lines=[],
+        psm=None,
+        error="roi not found",
+        backend=context.ocr_config.backend,
+    )
     if board is not None and board.roi_found:
         if context.ocr_stage and context.ocr_stage.best is not None:
             ocr_result = context.ocr_stage.best
         elif context.stop_after_stage is not None and STAGE_SEQUENCE.index(context.stop_after_stage) < STAGE_SEQUENCE.index("ocr"):
-            ocr_result = OCRResult(raw_text="", confidence=0.0, lines=[], psm=None, error="ocr not run")
+            ocr_result = OCRResult(
+                raw_text="",
+                confidence=0.0,
+                lines=[],
+                psm=None,
+                error="ocr not run",
+                backend=context.ocr_config.backend,
+            )
         else:
-            ocr_result = OCRResult(raw_text="", confidence=0.0, lines=[], psm=None, error="no text detected by OCR")
+            ocr_result = OCRResult(
+                raw_text="",
+                confidence=0.0,
+                lines=[],
+                psm=None,
+                error="no text detected by OCR",
+                backend=context.ocr_config.backend,
+            )
     parsed = context.parsed
     if parsed is None:
         if not roi_found:
             parsed = ParsedExpression("", "", None, False, "roi not found")
+        elif context.ocr_stage is not None and context.ocr_stage.best is not None:
+            parsed = parse_expression(context.ocr_stage.best.raw_text)
         else:
             parsed = ParsedExpression("", "", None, False, "pipeline stopped before postprocess")
     return PipelineRecord(

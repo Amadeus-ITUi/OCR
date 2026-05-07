@@ -10,17 +10,24 @@ from PIL import Image, ImageDraw
 from robocon_ocr.camera_tuning import DEFAULT_CAMERA_TUNING
 from robocon_ocr.cli import (
     LatestFrameBuffer,
+    DisplayState,
+    _build_status_panel,
+    _build_text_panel,
     _format_roi_debug_lines,
     _fit_panel_preserve_aspect,
     build_argparser,
     build_camera_config,
+    build_camera_pipeline_config,
     build_config,
     resolve_label_file,
 )
 from robocon_ocr.config import PipelineConfig
-from robocon_ocr.image_recognition.pix2tex_recognizer import OCRResult
+from robocon_ocr.image_recognition.base import OCRResult
 from robocon_ocr.image_recognition.preprocess import prepare_image_for_ocr
 from robocon_ocr.pipeline import run_image_pipeline
+from robocon_ocr.result.expression import ParsedExpression
+from robocon_ocr.result.reporter import PipelineRecord
+from robocon_ocr.staged_pipeline import PipelineContext
 
 
 def _create_board_image(size=(1280, 720), quad=None) -> Image.Image:
@@ -55,6 +62,7 @@ def test_build_config_auto_detects_manifest(tmp_path: Path):
     assert config.debug_dir is None
     assert config.stop_after_stage is None
     assert config.debug_save_stages is False
+    assert config.ocr.backend == "pix2tex"
 
 
 def test_build_config_supports_stage_stop_and_stage_debug_dir(tmp_path: Path):
@@ -78,6 +86,24 @@ def test_build_config_supports_stage_stop_and_stage_debug_dir(tmp_path: Path):
     assert config.debug_dir == debug_dir
     assert config.stop_after_stage == "expression_region"
     assert config.debug_save_stages is True
+
+
+def test_build_camera_pipeline_config_defaults_to_lightweight_backend():
+    args = build_argparser().parse_args(["camera"])
+
+    config = build_camera_pipeline_config(args)
+
+    assert config.ocr.backend == "lightweight"
+
+
+def test_build_config_accepts_explicit_ocr_backend_override(tmp_path: Path):
+    dataset_dir = tmp_path / "dataset"
+    dataset_dir.mkdir()
+    args = build_argparser().parse_args(["dataset", str(dataset_dir), "--ocr-backend", "lightweight"])
+
+    config = build_config(args)
+
+    assert config.ocr.backend == "lightweight"
 
 
 def test_build_camera_config_from_args():
@@ -140,6 +166,46 @@ def test_fit_panel_preserve_aspect_adds_letterbox_instead_of_stretching():
     assert np.all(panel[70:130, 20:180] == 255)
 
 
+def test_build_text_panel_supports_unicode_math_symbols():
+    panel = _build_text_panel(
+        ["Pipeline Status", "Raw:", "2×(9+19)×20÷5="],
+        (640, 240),
+    )
+
+    assert panel.shape == (240, 640, 3)
+    assert panel.mean() > 0
+
+
+def test_build_status_panel_renders_expression_and_answer_summary():
+    display = DisplayState(
+        context=PipelineContext(
+            image_name="camera_0.png",
+            original=Image.new("RGB", (1280, 720), "white"),
+            preprocess_config=PipelineConfig(dataset_dir=Path(".")).preprocess,
+            ocr_config=PipelineConfig(dataset_dir=Path(".")).ocr,
+        ),
+        record=PipelineRecord(
+            image_name="camera_0.png",
+            ocr=OCRResult(raw_text="2×(9+19)×20÷5=", confidence=0.97, lines=["2×(9+19)×20÷5="], backend="lightweight"),
+            parsed=ParsedExpression(
+                normalized_text="2×(9+19)×20÷5=",
+                expression="2×(9+19)×20÷5",
+                answer=224,
+                is_valid=True,
+            ),
+            label=None,
+            roi_found=True,
+        ),
+        frame_index=1,
+        stage_ms=12.3,
+    )
+
+    panel = _build_status_panel(display, (640, 360))
+
+    assert panel.shape == (360, 640, 3)
+    assert panel.mean() > 0
+
+
 def test_camera_parser_defaults_match_local_camera_setup():
     args = build_argparser().parse_args(["camera"])
     config = build_camera_config(args)
@@ -183,8 +249,8 @@ def test_run_image_pipeline_on_synthetic_camera_frame(tmp_path: Path):
 
     import robocon_ocr.pipeline as pipeline_module
 
-    original = pipeline_module.Pix2TexMathRecognizer
-    pipeline_module.Pix2TexMathRecognizer = StubRecognizer
+    original = pipeline_module.create_recognizer
+    pipeline_module.create_recognizer = lambda _config: StubRecognizer(_config)
     try:
         record = run_image_pipeline(
             image=image,
@@ -192,7 +258,7 @@ def test_run_image_pipeline_on_synthetic_camera_frame(tmp_path: Path):
             config=PipelineConfig(dataset_dir=tmp_path),
         )
     finally:
-        pipeline_module.Pix2TexMathRecognizer = original
+        pipeline_module.create_recognizer = original
 
     assert record.image_name == "camera_0.png"
     assert record.roi_found is True

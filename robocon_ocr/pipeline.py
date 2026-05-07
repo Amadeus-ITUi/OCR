@@ -4,8 +4,9 @@ from PIL import Image
 from PIL import ImageOps
 
 from robocon_ocr.config import PipelineConfig
+from robocon_ocr.image_recognition.base import MathTextRecognizer, OCRResult
 from robocon_ocr.image_recognition.dataset_source import list_images, load_labels
-from robocon_ocr.image_recognition.pix2tex_recognizer import OCRResult, Pix2TexMathRecognizer
+from robocon_ocr.image_recognition.factory import create_recognizer
 from robocon_ocr.image_recognition.preprocess import (
     PreprocessResult,
     prepare_for_ocr,
@@ -58,7 +59,7 @@ def _empty_record_result() -> tuple[OCRResult, ParsedExpression]:
 def _record_from_preprocess(
     image_name: str,
     preprocess_result: PreprocessResult,
-    recognizer: Pix2TexMathRecognizer,
+    recognizer: MathTextRecognizer,
     label,
 ) -> PipelineRecord:
     if not preprocess_result.roi_found:
@@ -78,11 +79,13 @@ def _record_from_preprocess(
 
 
 def _recognize_with_fallback_variants(
-    recognizer: Pix2TexMathRecognizer,
+    recognizer: MathTextRecognizer,
     preprocess_result: PreprocessResult,
 ) -> list[OCRResult]:
     primary = recognizer.recognize(preprocess_result.rectified)
     candidates = [primary]
+    if not getattr(recognizer, "supports_fallback_variants", True):
+        return candidates
     primary_parsed = parse_expression(primary.raw_text)
     short_expression = primary_parsed.is_valid and len(primary_parsed.expression) <= 6
     if primary.error is None and primary_parsed.is_valid and not short_expression:
@@ -130,7 +133,7 @@ def _save_legacy_debug_outputs(
 def run_pipeline(config: PipelineConfig) -> list[PipelineRecord]:
     image_paths = list_images(config.dataset_dir)
     labels = load_labels(config.label_file) if config.label_file else {}
-    recognizer = Pix2TexMathRecognizer(config.ocr)
+    recognizer = create_recognizer(config.ocr)
     records: list[PipelineRecord] = []
     warmed_up = False
 
@@ -160,7 +163,7 @@ def run_image_pipeline(
     image_name: str,
     config: PipelineConfig,
 ) -> PipelineRecord:
-    recognizer = Pix2TexMathRecognizer(config.ocr)
+    recognizer = create_recognizer(config.ocr)
     if config.ocr.warmup:
         recognizer.warmup()
     context = run_dataset_pipeline_image(

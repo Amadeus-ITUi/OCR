@@ -2,24 +2,18 @@ from __future__ import annotations
 
 import argparse
 import inspect
-from dataclasses import dataclass
 
 from PIL import Image
 
 from robocon_ocr.config import OCRConfig
+from robocon_ocr.image_recognition.base import OCRResult
 from robocon_ocr.result.expression import normalize_ocr_text, validate_ocr_text
 
 
-@dataclass(slots=True)
-class OCRResult:
-    raw_text: str
-    confidence: float
-    lines: list[str]
-    psm: int | None = None
-    error: str | None = None
-
-
 class Pix2TexMathRecognizer:
+    backend_name = "pix2tex"
+    supports_fallback_variants = True
+
     def __init__(self, config: OCRConfig) -> None:
         self.config = config
         self._engine = None
@@ -99,6 +93,7 @@ class Pix2TexMathRecognizer:
                 lines=[],
                 psm=None,
                 error="no text detected by OCR",
+                backend=self.backend_name,
             )
 
         normalized = normalize_ocr_text(raw_text)
@@ -110,6 +105,7 @@ class Pix2TexMathRecognizer:
                 lines=[],
                 psm=None,
                 error=error,
+                backend=self.backend_name,
             )
 
         return OCRResult(
@@ -118,4 +114,5 @@ class Pix2TexMathRecognizer:
             lines=[normalized] if normalized else [],
             psm=None,
             error=None if normalized else "no text detected by OCR",
+            backend=self.backend_name,
         )

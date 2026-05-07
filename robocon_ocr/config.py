@@ -8,8 +8,10 @@ from robocon_ocr.roi_tuning import DEFAULT_ROI_TUNING_VALUES
 
 @dataclass(slots=True)
 class OCRConfig:
+    backend: str = "pix2tex"
     device: str = "auto"
     model_path: str | None = None
+    lightweight_model_name: str = "PP-OCRv5_server_rec"
     warmup: bool = True
     strict_charset: bool = True
 

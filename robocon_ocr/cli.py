@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 import sys
 import threading
@@ -9,11 +10,11 @@ import time
 from time import strftime
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 from robocon_ocr.camera_tuning import DEFAULT_CAMERA_TUNING
-from robocon_ocr.config import CameraConfig, PipelineConfig
-from robocon_ocr.image_recognition.pix2tex_recognizer import Pix2TexMathRecognizer
+from robocon_ocr.config import CameraConfig, OCRConfig, PipelineConfig
+from robocon_ocr.image_recognition.factory import create_recognizer
 from robocon_ocr.result.reporter import PipelineRecord, summarize
 from robocon_ocr.staged_pipeline import STAGE_SEQUENCE
 from robocon_ocr.staged_pipeline import PipelineContext
@@ -25,6 +26,7 @@ from robocon_ocr.vision_processing.board_detection import ROIDebugInfo
 from robocon_ocr.pipeline import run_pipeline
 
 STAGE_CHOICES = list(STAGE_SEQUENCE)
+OCR_BACKEND_CHOICES = ["pix2tex", "lightweight"]
 
 
 @dataclass(slots=True)
@@ -88,6 +90,11 @@ def _add_stage_arguments(parser: argparse.ArgumentParser) -> None:
         "--debug-save-stages",
         action="store_true",
         help="Save stage-by-stage debug images into --debug-dir.",
+    )
+    parser.add_argument(
+        "--ocr-backend",
+        choices=OCR_BACKEND_CHOICES,
+        help="OCR backend override. Dataset defaults to pix2tex; camera defaults to lightweight.",
     )
 
 
@@ -197,6 +204,17 @@ def build_config(args: argparse.Namespace) -> PipelineConfig:
         debug_dir=args.debug_dir.expanduser() if args.debug_dir else None,
         stop_after_stage=args.stop_after_stage,
         debug_save_stages=args.debug_save_stages,
+        ocr=OCRConfig(backend=args.ocr_backend or "pix2tex"),
+    )
+
+
+def build_camera_pipeline_config(args: argparse.Namespace) -> PipelineConfig:
+    return PipelineConfig(
+        dataset_dir=Path("."),
+        debug_dir=args.debug_dir.expanduser() if args.debug_dir else None,
+        stop_after_stage=args.stop_after_stage,
+        debug_save_stages=args.debug_save_stages,
+        ocr=OCRConfig(backend=args.ocr_backend or "lightweight"),
     )
 
 
@@ -238,6 +256,7 @@ def build_camera_config(args: argparse.Namespace) -> CameraConfig:
 def print_records(records) -> None:
     for record in records:
         print(f"[{record.image_name}]")
+        print(f"  ocr_backend: {record.ocr.backend}")
         print(f"  raw_text: {record.ocr.raw_text}")
         print(f"  normalized: {record.parsed.normalized_text}")
         print(f"  expression: {record.parsed.expression}")
@@ -405,6 +424,7 @@ def _build_info_lines(display: DisplayState) -> list[str]:
         f"Latency: {display.stage_ms:.1f} ms",
         f"Completed: {context.completed_stage or 'none'}",
         f"StopAfter: {context.stop_after_stage or 'none'}",
+        f"OCR Backend: {record.ocr.backend}",
         f"ROI: {record.roi_found}",
         f"Confidence: {record.ocr.confidence:.4f}",
         f"Valid: {record.parsed.is_valid}",
@@ -454,29 +474,74 @@ def _build_info_lines(display: DisplayState) -> list[str]:
 
 
 def _build_text_panel(lines: list[str], panel_size: tuple[int, int]) -> np.ndarray:
-    try:
-        import cv2
-    except ModuleNotFoundError as exc:
-        raise RuntimeError("未安装 OpenCV GUI 版本，无法显示调试窗口。") from exc
-
     panel_w, panel_h = panel_size
-    canvas = np.zeros((panel_h, panel_w, 3), dtype=np.uint8)
-    canvas[:, :] = (28, 28, 28)
+    image = Image.new("RGB", (panel_w, panel_h), (28, 28, 28))
+    draw = ImageDraw.Draw(image)
     text_x = 18
     y = 42
-    font = cv2.FONT_HERSHEY_SIMPLEX
+    title_font = _load_dashboard_font(24)
+    body_font = _load_dashboard_font(18)
 
     for index, line in enumerate(lines):
         if y >= panel_h - 10:
             break
-        scale = 0.8 if index == 0 else 0.54
-        thickness = 2 if index == 0 else 1
+        font = title_font if index == 0 else body_font
         color = (120, 220, 255) if index == 0 else (235, 235, 235)
         if line.startswith("Error:") or line.startswith("OCR Error:") or line.startswith("Reason:"):
             color = (80, 160, 255)
-        cv2.putText(canvas, line, (text_x, y), font, scale, color, thickness, cv2.LINE_AA)
+        draw.text((text_x, y - 18), line, font=font, fill=color)
         y += 30 if index == 0 else 22
-    return canvas
+    return np.asarray(image)[:, :, ::-1].copy()
+
+
+def _build_status_panel(display: DisplayState, panel_size: tuple[int, int]) -> np.ndarray:
+    panel_w, panel_h = panel_size
+    image = Image.new("RGB", (panel_w, panel_h), (28, 28, 28))
+    draw = ImageDraw.Draw(image)
+
+    result_box = (18, 42, panel_w - 18, min(172, panel_h - 18))
+    draw.rounded_rectangle(result_box, radius=16, fill=(18, 52, 30), outline=(64, 170, 104), width=2)
+
+    title_font = _load_dashboard_font(24)
+    result_font = _load_dashboard_font(30)
+    answer_font = _load_dashboard_font(34)
+    body_font = _load_dashboard_font(18)
+
+    expression = display.record.parsed.expression or display.record.ocr.raw_text or "<empty>"
+    answer = str(display.record.parsed.answer) if display.record.parsed.answer is not None else "<pending>"
+    draw.text((34, 56), "Recognized Expression", font=title_font, fill=(188, 255, 208))
+    draw.text((34, 88), expression, font=result_font, fill=(92, 255, 138))
+    draw.text((34, 126), f"Answer: {answer}", font=answer_font, fill=(124, 255, 156))
+
+    lines = _build_info_lines(display)
+    text_x = 18
+    y = result_box[3] + 28
+    for index, line in enumerate(lines):
+        if y >= panel_h - 10:
+            break
+        font = title_font if index == 0 else body_font
+        color = (120, 220, 255) if index == 0 else (235, 235, 235)
+        if line.startswith("Error:") or line.startswith("OCR Error:") or line.startswith("Reason:"):
+            color = (80, 160, 255)
+        draw.text((text_x, y - 18), line, font=font, fill=color)
+        y += 30 if index == 0 else 22
+
+    return np.asarray(image)[:, :, ::-1].copy()
+
+
+@lru_cache(maxsize=8)
+def _load_dashboard_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    candidates = (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    )
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size=size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
 
 
 def _show_debug_windows(display: DisplayState, window_scale: float) -> bool:
@@ -502,7 +567,7 @@ def _show_debug_windows(display: DisplayState, window_scale: float) -> bool:
         top_right = _put_panel_title(_pil_to_bgr(board_debug, (panel_w, panel_h)), "Board Detection")
         bottom_left = _put_panel_title(_pil_to_bgr(stage_image, (panel_w, panel_h)), "Current Stage Output")
         bottom_right = _put_panel_title(
-            _fit_panel(_build_text_panel(info_lines, (panel_w, panel_h)), (panel_w, panel_h)),
+            _fit_panel(_build_status_panel(display, (panel_w, panel_h)), (panel_w, panel_h)),
             "Stage / OCR Status",
         )
 
@@ -551,7 +616,7 @@ def _process_camera_frame(
     frame_index: int,
     args: argparse.Namespace,
     pipeline_config: PipelineConfig,
-    recognizer: Pix2TexMathRecognizer,
+    recognizer,
 ) -> tuple[PipelineRecord, PipelineContext, float]:
     try:
         import cv2
@@ -581,13 +646,8 @@ def _stop_before_ocr(stop_after_stage: str | None) -> bool:
 
 def _run_async_camera(args: argparse.Namespace) -> int:
     camera = USBCameraCapture(build_camera_config(args))
-    pipeline_config = PipelineConfig(
-        dataset_dir=Path("."),
-        debug_dir=args.debug_dir.expanduser() if args.debug_dir else None,
-        stop_after_stage=args.stop_after_stage,
-        debug_save_stages=args.debug_save_stages,
-    )
-    recognizer = Pix2TexMathRecognizer(pipeline_config.ocr)
+    pipeline_config = build_camera_pipeline_config(args)
+    recognizer = create_recognizer(pipeline_config.ocr)
     if pipeline_config.ocr.warmup and not _stop_before_ocr(pipeline_config.stop_after_stage):
         recognizer.warmup()
     buffer = LatestFrameBuffer()
