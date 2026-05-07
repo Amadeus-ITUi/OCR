@@ -8,6 +8,7 @@ from robocon_ocr.roi_tuning import DEFAULT_ROI_TUNING_VALUES
 from robocon_ocr.image_recognition.preprocess import crop_foreground_text, prepare_for_ocr, prepare_image_for_ocr
 from robocon_ocr.vision_processing.expression_region import _scan_boundary_backward
 from robocon_ocr.vision_processing.expression_region import extract_expression_region
+from robocon_ocr.vision_processing.enhancement import enhance_for_ocr
 
 
 def _create_board_image(size=(1280, 720), quad=None) -> Image.Image:
@@ -53,6 +54,9 @@ def test_preprocess_config_defaults_come_from_roi_tuning():
     assert config.expression_bbox_padding_y == DEFAULT_ROI_TUNING_VALUES["expression_bbox_padding_y"]
     assert config.expression_bbox_expand_ratio_x == DEFAULT_ROI_TUNING_VALUES["expression_bbox_expand_ratio_x"]
     assert config.expression_bbox_expand_ratio_y == DEFAULT_ROI_TUNING_VALUES["expression_bbox_expand_ratio_y"]
+    assert config.enhance_contrast_clip_limit == DEFAULT_ROI_TUNING_VALUES["enhance_contrast_clip_limit"]
+    assert config.enhance_contrast_tile_grid_size == DEFAULT_ROI_TUNING_VALUES["enhance_contrast_tile_grid_size"]
+    assert config.enhance_remove_noise_area_min == DEFAULT_ROI_TUNING_VALUES["enhance_remove_noise_area_min"]
 
 
 def test_prepare_image_for_ocr_detects_perspective_quad():
@@ -140,6 +144,53 @@ def test_extract_expression_region_uses_otsu_on_blue_tinted_board():
     assert result.cropped_region is not None
     assert result.cropped_region.width < image.width
     assert result.cropped_region.height < image.height
+
+
+def test_enhance_for_ocr_applies_local_contrast_without_breaking_binary_output():
+    image = Image.new("L", (96, 48), 205)
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((18, 12, 76, 34), fill=170)
+    draw.rectangle((24, 16, 30, 30), fill=110)
+    draw.rectangle((42, 16, 48, 30), fill=110)
+    draw.rectangle((24, 22, 48, 24), fill=110)
+
+    result = enhance_for_ocr(
+        image.convert("RGB"),
+        PreprocessConfig(
+            scale_factor=1.0,
+            enhance_contrast_clip_limit=3.0,
+            enhance_contrast_tile_grid_size=4,
+        ),
+    )
+
+    assert result.denoised.mode == "L"
+    assert result.binary.mode == "L"
+    assert set(np.asarray(result.prepared_for_ocr).reshape(-1)) <= {0, 255}
+    assert np.asarray(result.denoised).std() > np.asarray(image).std()
+
+
+def test_enhance_for_ocr_removes_tiny_foreground_noise():
+    image = Image.new("L", (96, 48), 220)
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((20, 12, 72, 34), fill=60)
+    draw.rectangle((6, 6, 6, 6), fill=40)
+    draw.rectangle((88, 10, 88, 10), fill=40)
+    draw.rectangle((10, 40, 10, 40), fill=40)
+
+    result = enhance_for_ocr(
+        image.convert("RGB"),
+        PreprocessConfig(
+            scale_factor=1.0,
+            enhance_contrast_clip_limit=0.0,
+            enhance_remove_noise_area_min=4,
+        ),
+    )
+
+    prepared = np.asarray(result.prepared_for_ocr)
+    assert prepared[6, 6] == 255
+    assert prepared[10, 88] == 255
+    assert prepared[40, 10] == 255
+    assert prepared[20, 30] == 0
 
 
 def test_extract_expression_region_expands_final_bbox_by_ratio():

@@ -65,6 +65,14 @@ DEFAULT_ROI_TUNING_VALUES: dict[str, int | float] = {
     # 黑字偏细、OCR 容易漏笔画时可以适当提高；过大则会放大噪声。
     "scale_factor": 2.0,
 
+    # enhancement：局部对比度增强。
+    # clip limit 越大，对比度提升越明显，但也更容易把噪点一起抬起来。
+    "enhance_contrast_clip_limit": 2.4,
+    # tile grid size 越小，增强越偏局部；越大，增强越平滑。
+    "enhance_contrast_tile_grid_size": 8,
+    # 二值化后删除极小颗粒噪点的最小连通域面积阈值。
+    "enhance_remove_noise_area_min": 4,
+
     # 表达式区域提取：搜索窗上下左右忽略比例。
     "expression_search_top_ratio": 0.05,
     "expression_search_bottom_ratio": 0.05,
