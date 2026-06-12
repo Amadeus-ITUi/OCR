@@ -1,18 +1,96 @@
 # Robocon OCR
 
-这是一个面向 RoboCon 四则运算题目的离线识别项目骨架。
+面向 RoboCon 数学题目的离线 OCR 识别，支持数据集批量识别和 USB 摄像头实时识别。
 
-当前阶段只实现：
+## Jetson (Orin NX / AGX) 快速部署
 
-- `dataset` 图片作为输入
-- `pix2tex` / `PaddleOCR lightweight` 两种 OCR 后端
-- `USB` 摄像头实时取流并持续送入 OCR
-- 对识别结果做规则化、表达式求值、答案输出
-- 用标注文件评估识别准确率
+目标平台：NVIDIA Jetson 系列，JetPack 5.x / 6.x，Ubuntu 20.04 / 22.04。
 
-暂未实现：
+### 1. 克隆项目
 
-- 视觉处理层复杂透视矫正、去反光、去模糊
+```bash
+git clone <repo-url> && cd OCR
+```
+
+### 2. 创建虚拟环境
+
+Jetson 系统 Python 通常是 3.10，直接用它建 venv：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip setuptools wheel
+```
+
+### 3. 安装 PaddlePaddle GPU（Jetson 版）
+
+**这是部署中最关键的一步。** 不同于 PC 的 `paddlepaddle-gpu`，Jetson 需要专用的预编译包。根据你的 JetPack 版本选择：
+
+**JetPack 5.x (L4T R35.x, Ubuntu 20.04):**
+```bash
+# 先安装 Jetson 版 PaddlePaddle
+wget https://paddle-inference-lib.bj.bcebos.com/2.5.0/jetson/jetpack5.0.2/all/paddlepaddle_gpu-2.5.0-cp38-cp38-linux_aarch64.whl
+pip install paddlepaddle_gpu-2.5.0-cp38-cp38-linux_aarch64.whl
+```
+
+**JetPack 6.x (L4T R36.x, Ubuntu 22.04):**
+```bash
+# JetPack 6 官方包可能尚未发布，检查最新版本：
+# https://www.paddlepaddle.org.cn/documentation/docs/zh/install/compile/jetson-cn.html
+pip install paddlepaddle-gpu  # 尝试直接安装，失败则参考官方 Jetson 编译指南
+```
+
+验证安装：
+```bash
+python3 -c "import paddle; print(paddle.device.is_compiled_with_cuda())"  # 应输出 True
+```
+
+### 4. 安装项目依赖
+
+```bash
+pip install -r requirements-paddle.txt
+```
+
+`requirements-paddle.txt` 已包含：`numpy`, `Pillow`, `opencv-python`, `paddleocr`。
+
+### 5. 验证静态图片识别
+
+```bash
+# 先跑一张图确认 pipeline 正常
+python3 -m robocon_ocr dataset/num_100_com_4 --ocr-backend lightweight
+```
+
+预期输出：每张图打印 `raw_text`、`expression`、`answer`，最后输出汇总统计。
+
+### 6. 验证摄像头实时识别
+
+```bash
+# 确认摄像头设备号（通常 Jetson 上 CSI 摄像头是 /dev/video0）
+ls /dev/video*
+
+# 修改 camera_tuning.py 中的 device_index 为实际设备号，然后：
+python3 -m robocon_ocr camera --ocr-backend lightweight --print-all
+```
+
+按 `Ctrl+C` 停止。如果带显示器，可加 `--show-window --show-stage-debug` 查看调试面板。
+
+### 7. 摄像头参数调优
+
+编辑 [robocon_ocr/camera_tuning.py](robocon_ocr/camera_tuning.py)：
+
+- `device_index` — 摄像头设备号（Jetson CSI 通常是 `0`，USB 通常 `2`）
+- `exposure_time_absolute` — 优先调这个，防止白板过曝
+- `focus_absolute` — 手动对焦到题目最清晰
+- `width=1280, height=720` — 推荐分辨率，平衡清晰度和处理速度
+
+### 常见 Jetson 部署问题
+
+| 问题 | 原因 | 解决 |
+|---|---|---|
+| `import paddle` 报 `libcublas.so` 找不到 | PaddlePaddle 版本与 JetPack CUDA 不匹配 | 确认下载的 .whl 对应你的 JetPack 版本 |
+| `cv2.imshow` 报错 | Jetson 装的 `opencv-python-headless` | `pip install opencv-python` 替换 |
+| 摄像头打不开 | `device_index` 不对或权限不足 | `ls /dev/video*` 确认设备号；`sudo usermod -aG video $USER` |
+| OCR 模型下载慢/失败 | Jetson 首次运行需从 HuggingFace 下载模型 | PC 上跑一次然后把 `~/.paddlex/` 目录复制到 Jetson |
 
 ## 项目分层
 
