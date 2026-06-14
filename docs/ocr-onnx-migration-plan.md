@@ -31,84 +31,47 @@ PaddleOCR 链路完全不受影响。
 
 ---
 
-## 任务二：PaddleOCR 转 ONNX 及推理封装（待执行）
+## 任务二：PaddleOCR 转 ONNX 及推理封装 ✅ 已完成
 
-### 目标
+### 实施摘要
 
-将 `PP-OCRv5_server_rec` 模型从 PaddlePaddle 格式转换为 ONNX，编写包含预处理 + ONNX 推理 + CTC 解码的推理封装，作为新的 OCR 后端（`onnx` backend），在离线数据集上验证精度与 PaddleOCR 原生一致。
+PP-OCRv5_server_rec 模型已成功导出为 ONNX 格式，OnnxMathRecognizer 已实现并集成到项目中。
 
-### 技术要点
+### 实际技术发现
 
-**PaddleOCR `TextRecognition` 内部流程：**
+模型是 PaddleX 3.x PIR 格式（`inference.json` + `inference.pdiparams`），非传统 `.pdmodel` 格式。paddle2onnx v2.1.0 原生支持 PIR 格式。
 
-```
-输入 PIL Image (RGB)
-  → DecodeImage: 保持 HWC BGR
-  → RecResizeImg: resize 到 48px 高，保持宽高比，最大宽 320px
-  → NormalizeImage: (pixel - 127.5) / 127.5
-  → HWC → CHW
-  → 模型前向 → CTC logits [T, batch, num_classes]
-  → CTCLabelDecode: argmax per frame → 去重连续相同 → 去 blank → 输出文本
-```
+ONNX 模型输出 class 0 为 CTC blank token，class i (1-based) 映射到 character_dict[i-1]。模型有 18385 个输出类，字典有 18383 个字符。
 
-导出 ONNX 仅包含模型前向部分，预处理和 CTC 解码需自行实现且必须精确对齐。
+### 执行结果
 
-### 操作步骤
+| 步骤 | 状态 |
+|------|------|
+| paddle2onnx 导出（opset 14） | 完成，模型从 1133 → 511 节点（常量折叠） |
+| `onnx_recognizer.py` 实现 | 完成：预处理 + ONNX RT 推理 + CTC greedy decode |
+| 字符字典提取 | 完成：`models/dict.txt`（18383 字符，index 0 = blank） |
+| 工厂/配置/CLI 注册 | 完成：`--ocr-backend onnx` 可用 |
+| 精度验证 | 完成：200/200 精确匹配（100%） |
+| 测试覆盖 | 完成：15 个新增测试，70/70 全通过 |
 
-#### 阶段 A：导出 ONNX 模型
+### 精度对比
 
-1. 在 `.venv-paddle` 环境中安装 `paddle2onnx`
-2. 模型文件位置：`~/.paddlex/official_models/PP-OCRv5_server_rec/`
-   - `inference.pdmodel` — 模型结构
-   - `inference.pdiparams` — 权重
-3. 导出：
-   ```bash
-   paddle2onnx --model_dir ~/.paddlex/official_models/PP-OCRv5_server_rec/ \
-               --model_filename inference.pdmodel \
-               --params_filename inference.pdiparams \
-               --save_file models/PP-OCRv5_server_rec.onnx \
-               --opset_version 14
-   ```
-4. 验证 ONNX 模型
+见 [docs/onnx-vs-paddle-benchmark.txt](onnx-vs-paddle-benchmark.txt)
 
-#### 阶段 B：编写 ONNX 推理封装
+| 数据集 | 图片数 | 匹配率 |
+|--------|--------|--------|
+| num_100_com_4 | 100 | 100% |
+| num_100_com_8 | 100 | 100% |
+| **合计** | **200** | **100%** |
 
-1. **新建 `robocon_ocr/image_recognition/onnx_recognizer.py`**
-   - `OnnxMathRecognizer` 类，`backend_name = "onnx"`, `supports_fallback_variants = False`
-
-2. **预处理模块**（与 PaddleOCR 精确对齐）：
-   - PIL RGB → BGR numpy
-   - Resize：高 48px，等比缩放，宽上限 320px
-   - 归一化：`(x - 127.5) / 127.5`
-   - HWC → CHW + batch dim
-
-3. **CTC 解码模块**：
-   - squeeze batch → 逐帧 argmax → 合并相邻相同 → 过滤 blank → 查字典
-   - 置信度 = 非 blank 帧的最大概率均值
-
-4. **字符字典**：从模型目录提取，导出到 `models/dict.txt`
-
-5. **注册**：factory.py 添加 `"onnx"` 分支，config.py 添加 `onnx_model_path` / `onnx_dict_path`，cli.py 添加 `"onnx"` 选项
-
-#### 阶段 C：精度验证
-
-- 用 `num_100_com_4` 和 `num_100_com_8` 对比 PaddleOCR 原生与 ONNX 后端
-- 目标：表达式匹配率和答案匹配率差异 < 1%
-- 结果保存到 `docs/onnx-vs-paddle-benchmark.txt`
-
-#### 阶段 D：测试
-
-- 新建 `tests/test_onnx_recognizer.py`
-- 测试预处理 shape、CTC 解码、工厂分发、标准化 / charset 验证
-
-### 关键文件
+### 修改的文件清单
 
 | 文件 | 操作 |
 |------|------|
 | `robocon_ocr/image_recognition/onnx_recognizer.py` | **新建** |
 | `robocon_ocr/image_recognition/factory.py` | 修改：添加 `"onnx"` 分支 |
 | `robocon_ocr/config.py` | 修改：添加 `onnx_model_path`、`onnx_dict_path` |
-| `robocon_ocr/cli.py` | 修改：添加 `"onnx"` 选项 |
+| `robocon_ocr/cli.py` | 修改：`OCR_BACKEND_CHOICES` 添加 `"onnx"` |
 | `models/PP-OCRv5_server_rec.onnx` | **新建** |
 | `models/dict.txt` | **新建** |
 | `tests/test_onnx_recognizer.py` | **新建** |

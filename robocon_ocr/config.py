@@ -11,6 +11,8 @@ class OCRConfig:
     backend: str = "lightweight"
     device: str = "auto"
     lightweight_model_name: str = "PP-OCRv5_server_rec"
+    onnx_model_path: str = "models/PP-OCRv5_server_rec.onnx"
+    onnx_dict_path: str = "models/dict.txt"
     warmup: bool = True
     strict_charset: bool = True
 

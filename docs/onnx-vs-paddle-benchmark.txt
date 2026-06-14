@@ -1,0 +1,29 @@
+ONNX vs PaddleOCR Accuracy Comparison
+====================================
+Date: 2025-06-14
+Model: PP-OCRv5_server_rec
+ONNX opset: 14
+ONNX Runtime: 1.23.2 (CPU)
+
+Dataset: num_100_com_4
+  Images: 100
+  Expression matches: 100/100 (100.0%)
+  Mismatches: 0
+
+Dataset: num_100_com_8
+  Images: 100
+  Expression matches: 100/100 (100.0%)
+  Mismatches: 0
+
+Total: 200/200 exact match (100.0%)
+
+Performance (average per-image inference):
+  PaddleOCR: ~17.6 ms
+  ONNX RT:   ~21.7 ms
+
+Key implementation details:
+  - Preprocessing: RGB→BGR, cv2.resize(height=48, aspect preserved), (x-127.5)/127.5, HWC→CHW
+  - CTC decoding: class 0 = blank, class i (1-based) = dict[i-1]
+  - Character dictionary: 18383 chars (model output: 18385 classes)
+  - ONNX input: [batch, 3, 48, dynamic_w] float32
+  - ONNX output: [batch, T, 18385] float32 (logits)

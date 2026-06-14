@@ -2,95 +2,106 @@
 
 面向 RoboCon 数学题目的离线 OCR 识别，支持数据集批量识别和 USB 摄像头实时识别。
 
-## Jetson (Orin NX / AGX) 快速部署
+## 项目功能
 
-目标平台：NVIDIA Jetson 系列，JetPack 5.x / 6.x，Ubuntu 20.04 / 22.04。
+- **离线数据集批量识别** — 遍历数据集目录，自动定位题板、提取表达式区域、OCR 识别、表达式求值
+- **USB 摄像头实时识别** — 异步采集 + OCR 处理，支持调试窗口可视化
+- **双 OCR 后端**
+  - `lightweight` — PaddleOCR TextRecognition (PP-OCRv5_server_rec)，需 PaddlePaddle 环境
+  - `onnx` — ONNX Runtime 推理，无需 PaddlePaddle，跨平台部署更简单
+- **7 阶段流水线** — `board_detection → rectification → expression_region → enhancement → segmentation → ocr → postprocess`
+- **按阶段截停调试** — `--stop-after-stage` 可在任意阶段中止，配合 `--debug-save-stages` 逐阶段落盘
 
-### 1. 克隆项目
+## 快速部署（x86 / Jetson 通用）
+
+### 方式一：ONNX Runtime（推荐用于 Jetson，无需 PaddlePaddle）
+
+ONNX 后端只需要 `onnxruntime`，ARM64 平台安装简单：
 
 ```bash
 git clone <repo-url> && cd OCR
+python3 -m venv .venv-onnx
+source .venv-onnx/bin/activate
+pip install -U pip setuptools wheel
+pip install numpy Pillow opencv-python-headless onnxruntime
 ```
 
-### 2. 创建虚拟环境
-
-Jetson 系统 Python 通常是 3.10，直接用它建 venv：
+项目已提供预导出的 ONNX 模型和字符字典：
+- `models/PP-OCRv5_server_rec.onnx`
+- `models/dict.txt`
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -U pip setuptools wheel
+# 验证
+python3 -m robocon_ocr dataset/num_100_com_4 --ocr-backend onnx
 ```
 
-### 3. 安装 PaddlePaddle GPU（Jetson 版）
+如需从 Paddle 模型重新导出 ONNX（PC 端操作）：
 
-**这是部署中最关键的一步。** 不同于 PC 的 `paddlepaddle-gpu`，Jetson 需要专用的预编译包。根据你的 JetPack 版本选择：
+```bash
+source .venv-paddle/bin/activate
+pip install paddle2onnx
+paddle2onnx --model_dir ~/.paddlex/official_models/PP-OCRv5_server_rec/ \
+            --model_filename inference.json \
+            --params_filename inference.pdiparams \
+            --save_file models/PP-OCRv5_server_rec.onnx \
+            --opset_version 14
+```
+
+### 方式二：PaddleOCR（GPU 加速，需 CUDA）
+
+x86 环境：
+
+```bash
+git clone <repo-url> && cd OCR
+python3.10 -m venv .venv-paddle
+source .venv-paddle/bin/activate
+pip install -U pip setuptools wheel
+pip install -r requirements-paddle.txt
+```
+
+GPU 用户额外安装对应 CUDA 版本的 PaddlePaddle：
+
+```bash
+# RTX 4060 / CUDA 12.6 示例：
+pip install --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/ paddlepaddle-gpu==3.3.1
+```
+
+```bash
+# 验证
+python3 -m robocon_ocr dataset/num_100_com_4 --ocr-backend lightweight
+```
+
+### Jetson (Orin NX / AGX) PaddlePaddle 部署
+
+Jetson 需要专用的 PaddlePaddle 预编译包。根据 JetPack 版本选择：
 
 **JetPack 5.x (L4T R35.x, Ubuntu 20.04):**
 ```bash
-# 先安装 Jetson 版 PaddlePaddle
 wget https://paddle-inference-lib.bj.bcebos.com/2.5.0/jetson/jetpack5.0.2/all/paddlepaddle_gpu-2.5.0-cp38-cp38-linux_aarch64.whl
 pip install paddlepaddle_gpu-2.5.0-cp38-cp38-linux_aarch64.whl
+pip install -r requirements-paddle.txt
 ```
 
 **JetPack 6.x (L4T R36.x, Ubuntu 22.04):**
 ```bash
-# JetPack 6 官方包可能尚未发布，检查最新版本：
-# https://www.paddlepaddle.org.cn/documentation/docs/zh/install/compile/jetson-cn.html
-pip install paddlepaddle-gpu  # 尝试直接安装，失败则参考官方 Jetson 编译指南
-```
-
-验证安装：
-```bash
-python3 -c "import paddle; print(paddle.device.is_compiled_with_cuda())"  # 应输出 True
-```
-
-### 4. 安装项目依赖
-
-```bash
+# 推荐优先使用 ONNX 后端（方式一），避免 Jetson PaddlePaddle 兼容问题
+# 若必须用 PaddlePaddle GPU，参考官方 Jetson 编译指南
 pip install -r requirements-paddle.txt
 ```
 
-`requirements-paddle.txt` 已包含：`numpy`, `Pillow`, `opencv-python`, `paddleocr`。
-
-### 5. 验证静态图片识别
-
+验证：
 ```bash
-# 先跑一张图确认 pipeline 正常
-python3 -m robocon_ocr dataset/num_100_com_4 --ocr-backend lightweight
+python3 -c "import paddle; print(paddle.device.is_compiled_with_cuda())"  # 应输出 True
 ```
-
-预期输出：每张图打印 `raw_text`、`expression`、`answer`，最后输出汇总统计。
-
-### 6. 验证摄像头实时识别
-
-```bash
-# 确认摄像头设备号（通常 Jetson 上 CSI 摄像头是 /dev/video0）
-ls /dev/video*
-
-# 修改 camera_tuning.py 中的 device_index 为实际设备号，然后：
-python3 -m robocon_ocr camera --ocr-backend lightweight --print-all
-```
-
-按 `Ctrl+C` 停止。如果带显示器，可加 `--show-window --show-stage-debug` 查看调试面板。
-
-### 7. 摄像头参数调优
-
-编辑 [robocon_ocr/camera_tuning.py](robocon_ocr/camera_tuning.py)：
-
-- `device_index` — 摄像头设备号（Jetson CSI 通常是 `0`，USB 通常 `2`）
-- `exposure_time_absolute` — 优先调这个，防止白板过曝
-- `focus_absolute` — 手动对焦到题目最清晰
-- `width=1280, height=720` — 推荐分辨率，平衡清晰度和处理速度
 
 ### 常见 Jetson 部署问题
 
 | 问题 | 原因 | 解决 |
 |---|---|---|
-| `import paddle` 报 `libcublas.so` 找不到 | PaddlePaddle 版本与 JetPack CUDA 不匹配 | 确认下载的 .whl 对应你的 JetPack 版本 |
-| `cv2.imshow` 报错 | Jetson 装的 `opencv-python-headless` | `pip install opencv-python` 替换 |
+| `import paddle` 报 `libcublas.so` 找不到 | PaddlePaddle 版本与 JetPack CUDA 不匹配 | 优先使用 ONNX 后端；或确认 .whl 对应 JetPack 版本 |
+| `cv2.imshow` 报错 | 装了 `opencv-python-headless` | `pip install opencv-python` 替换 |
 | 摄像头打不开 | `device_index` 不对或权限不足 | `ls /dev/video*` 确认设备号；`sudo usermod -aG video $USER` |
-| OCR 模型下载慢/失败 | Jetson 首次运行需从 HuggingFace 下载模型 | PC 上跑一次然后把 `~/.paddlex/` 目录复制到 Jetson |
+| OCR 模型下载慢/失败 | PaddleOCR 首次需从网络下载模型 | PC 上跑一次然后把 `~/.paddlex/` 复制到 Jetson；或用 ONNX 后端（模型已内置） |
 
 ## 项目分层
 
@@ -193,42 +204,28 @@ python3 -m robocon_ocr camera \
 
 ## 安装
 
-建议使用 `Python 3.10` 创建虚拟环境：
-
-```bash
-python3.10 -m venv .venv-paddle
-source .venv-paddle/bin/activate
-python -m pip install -U pip setuptools wheel
-pip install -r requirements-paddle.txt
-```
-
-GPU 用户需额外安装对应 CUDA 版本的 PaddlePaddle：
-
-```bash
-# RTX 4060 / CUDA 12.6 示例：
-python -m pip install \
-  --index-url https://pypi.org/simple \
-  --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
-  --trusted-host www.paddlepaddle.org.cn \
-  --trusted-host paddle-whl.bj.bcebos.com \
-  paddlepaddle-gpu==3.3.1
-```
-
-当前 `RTX 4060` 已验证 `paddle 3.3.1 + gpu:0` 可以正常导入。
+请参考顶部「快速部署」章节，根据需求选择 ONNX Runtime（方式一）或 PaddleOCR（方式二）。
 
 ## OCR 后端与命令行
 
-当前 OCR 后端：
+当前支持两个 OCR 后端，通过 `--ocr-backend` 指定：
 
-- `lightweight` — 基于 `PaddleOCR TextRecognition`，模型 `PP-OCRv5_server_rec`，单次识别，优先保障实时性和稳定性。
-
-命令行通过 `--ocr-backend` 指定（当前仅 `lightweight`）：
-
-```bash
---ocr-backend lightweight
-```
+| 后端 | 引擎 | 依赖 | 适用场景 |
+|------|------|------|----------|
+| `lightweight` | PaddleOCR TextRecognition (PP-OCRv5_server_rec) | PaddlePaddle | x86 GPU 加速 |
+| `onnx` | ONNX Runtime | onnxruntime | Jetson / ARM64 / Docker 跨平台部署 |
 
 `dataset` 和 `camera` 模式均默认 `lightweight`。
+
+```bash
+# PaddleOCR 后端
+python3 -m robocon_ocr dataset/num_100_com_4 --ocr-backend lightweight
+
+# ONNX Runtime 后端
+python3 -m robocon_ocr dataset/num_100_com_4 --ocr-backend onnx
+```
+
+ONNX 后端精度与 PaddleOCR 原生一致（200 样本 0 差异），详见 [docs/ocr-onnx-migration-plan.md](docs/ocr-onnx-migration-plan.md)。
 
 ## 运行离线识别
 
@@ -577,16 +574,15 @@ python3 -m robocon_ocr dataset/num_100_com_8 \
 
 ### OCR 识别路径
 
-当前 OCR 使用 PaddleOCR 的 `TextRecognition`：
+当前支持两个 OCR 引擎：
 
-- 模型：`PP-OCRv5_server_rec`
-- `device=auto` 时由 Paddle 自动决定设备
-- `.venv-paddle` 环境已验证可落到 `gpu:0`
+- `lightweight` — PaddleOCR `TextRecognition`，需安装 PaddlePaddle
+- `onnx` — ONNX Runtime 推理，精度与 PaddleOCR 一致，无需 PaddlePaddle
 
-完整顺序：
+两者共用同一模型 `PP-OCRv5_server_rec`，完整顺序：
 
 1. 主输入图：`enhancement.prepared_for_ocr`
-2. OCR 引擎：`PaddleOCR TextRecognition`
+2. OCR 引擎：按 `--ocr-backend` 选择
 3. 文本规范化：统一 `x/* -> ×`、`/ -> ÷`、括号、空白等
 4. 字符集限制：只接受 `0-9 + - × ÷ ( ) =`
 5. 表达式解析与求值

@@ -26,7 +26,7 @@ from robocon_ocr.vision_processing.board_detection import ROIDebugInfo
 from robocon_ocr.pipeline import run_pipeline
 
 STAGE_CHOICES = list(STAGE_SEQUENCE)
-OCR_BACKEND_CHOICES = ["lightweight"]
+OCR_BACKEND_CHOICES = ["lightweight", "onnx"]
 
 
 @dataclass(slots=True)
