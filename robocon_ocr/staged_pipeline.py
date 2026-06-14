@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Literal
 
 from PIL import Image
-from PIL import ImageOps
 
 from robocon_ocr.config import OCRConfig, PipelineConfig, PreprocessConfig
 from robocon_ocr.image_recognition.base import MathTextRecognizer, OCRResult
@@ -88,64 +87,6 @@ class PipelineContext:
         return None
 
 
-def _select_best_result(candidates) -> tuple:
-    best_choice = None
-
-    for candidate in candidates:
-        parsed = parse_expression(candidate.raw_text)
-        choice = (
-            candidate,
-            parsed,
-            (
-                parsed.is_valid,
-                candidate.confidence,
-                len(parsed.expression),
-                -(parsed.error is not None),
-            ),
-        )
-        if best_choice is None or choice[2] > best_choice[2]:
-            best_choice = choice
-
-    if best_choice is None:
-        return None, ParsedExpression("", "", None, False, "empty expression")
-    return best_choice[0], best_choice[1]
-
-
-def recognize_with_fallback_variants(
-    recognizer: MathTextRecognizer,
-    enhancement_result: EnhancementResult,
-    expression_region_result: ExpressionRegionResult,
-) -> list[OCRResult]:
-    if expression_region_result.cropped_region is None:
-        return []
-    primary = recognizer.recognize(enhancement_result.prepared_for_ocr.convert("RGB"))
-    candidates = [primary]
-    if not getattr(recognizer, "supports_fallback_variants", True):
-        return candidates
-    primary_parsed = parse_expression(primary.raw_text)
-    short_expression = primary_parsed.is_valid and len(primary_parsed.expression) <= 6
-    if primary.error is None and primary_parsed.is_valid and not short_expression:
-        return candidates
-
-    fallback_images = [
-        ("gray", expression_region_result.cropped_region.convert("RGB"), 1.03 if short_expression else 1.0),
-        (
-            "invert_prepared",
-            ImageOps.invert(enhancement_result.prepared_for_ocr.convert("L")).convert("RGB"),
-            1.01 if short_expression else 1.0,
-        ),
-    ]
-    seen_raw = {primary.raw_text}
-    if short_expression:
-        primary.confidence = min(primary.confidence, 1.0)
-    for _name, image, confidence_boost in fallback_images:
-        candidate = recognizer.recognize(image)
-        if candidate.raw_text in seen_raw and candidate.error == primary.error:
-            continue
-        candidate.confidence *= confidence_boost
-        candidates.append(candidate)
-        seen_raw.add(candidate.raw_text)
-    return candidates
 
 
 def _snapshot(stage_name: StageName, image: Image.Image | None, *lines: str) -> PipelineDebugSnapshot:
@@ -284,14 +225,11 @@ class _OCRStage:
         if context.expression_region is None or context.enhancement is None:
             return context
         recognizer = self._recognizer or create_recognizer(context.ocr_config)
-        candidates = recognize_with_fallback_variants(recognizer, context.enhancement, context.expression_region)
-        if not candidates:
-            return context
-        best, _parsed = _select_best_result(candidates)
+        best = recognizer.recognize(context.enhancement.prepared_for_ocr.convert("RGB"))
         stage_result = OCRStageResult(
-            candidates=candidates,
+            candidates=[best],
             best=best,
-            error=None if best is None else best.error,
+            error=best.error,
         )
         context.ocr_stage = stage_result
         preview = context.enhancement.prepared_for_ocr
@@ -299,8 +237,7 @@ class _OCRStage:
             self.name,
             preview,
             "OCR complete",
-            f"Backend: {best.backend if best else getattr(recognizer, 'backend_name', 'unknown')}",
-            f"Candidates: {len(candidates)}",
+            f"Backend: {best.backend}",
             f"Best: {best.raw_text if best else '<empty>'}",
             f"Error: {stage_result.error or 'none'}",
         )

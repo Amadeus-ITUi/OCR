@@ -26,7 +26,7 @@ from robocon_ocr.vision_processing.board_detection import ROIDebugInfo
 from robocon_ocr.pipeline import run_pipeline
 
 STAGE_CHOICES = list(STAGE_SEQUENCE)
-OCR_BACKEND_CHOICES = ["pix2tex", "lightweight"]
+OCR_BACKEND_CHOICES = ["lightweight"]
 
 
 @dataclass(slots=True)
@@ -94,7 +94,7 @@ def _add_stage_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--ocr-backend",
         choices=OCR_BACKEND_CHOICES,
-        help="OCR backend override. Dataset defaults to pix2tex; camera defaults to lightweight.",
+        help="OCR backend override. Both dataset and camera default to lightweight.",
     )
 
 
@@ -204,7 +204,7 @@ def build_config(args: argparse.Namespace) -> PipelineConfig:
         debug_dir=args.debug_dir.expanduser() if args.debug_dir else None,
         stop_after_stage=args.stop_after_stage,
         debug_save_stages=args.debug_save_stages,
-        ocr=OCRConfig(backend=args.ocr_backend or "pix2tex"),
+        ocr=OCRConfig(backend=args.ocr_backend or "lightweight"),
     )
 
 

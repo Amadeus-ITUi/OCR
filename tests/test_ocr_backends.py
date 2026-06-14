@@ -7,13 +7,6 @@ from PIL import Image
 from robocon_ocr.config import OCRConfig
 from robocon_ocr.image_recognition.factory import create_recognizer
 from robocon_ocr.image_recognition.lightweight_recognizer import LightweightMathRecognizer
-from robocon_ocr.image_recognition.pix2tex_recognizer import Pix2TexMathRecognizer
-
-
-def test_create_recognizer_builds_pix2tex_backend():
-    recognizer = create_recognizer(OCRConfig(backend="pix2tex"))
-
-    assert isinstance(recognizer, Pix2TexMathRecognizer)
 
 
 def test_create_recognizer_builds_lightweight_backend():

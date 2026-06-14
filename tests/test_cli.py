@@ -62,7 +62,7 @@ def test_build_config_auto_detects_manifest(tmp_path: Path):
     assert config.debug_dir is None
     assert config.stop_after_stage is None
     assert config.debug_save_stages is False
-    assert config.ocr.backend == "pix2tex"
+    assert config.ocr.backend == "lightweight"
 
 
 def test_build_config_supports_stage_stop_and_stage_debug_dir(tmp_path: Path):
@@ -291,7 +291,7 @@ def test_roi_debug_lines_render_thresholds_and_reason(tmp_path: Path):
     assert any(line.startswith("WhiteThr:") for line in lines)
 
 
-@pytest.mark.skipif(importlib.util.find_spec("pix2tex") is None, reason="pix2tex not installed")
+@pytest.mark.skipif(importlib.util.find_spec("paddleocr") is None, reason="paddleocr not installed")
 def test_module_cli_uses_auto_detected_label_file(tmp_path: Path):
     _create_board_image().save(tmp_path / "problem_0001.png")
     (tmp_path / "problems_and_answers.txt").write_text(
@@ -311,7 +311,7 @@ def test_module_cli_uses_auto_detected_label_file(tmp_path: Path):
     assert "[summary]" in result.stdout
 
 
-@pytest.mark.skipif(importlib.util.find_spec("pix2tex") is None, reason="pix2tex not installed")
+@pytest.mark.skipif(importlib.util.find_spec("paddleocr") is None, reason="paddleocr not installed")
 def test_module_cli_runs_without_label_file(tmp_path: Path):
     _create_board_image().save(tmp_path / "problem_0001.png")
 
@@ -328,7 +328,7 @@ def test_module_cli_runs_without_label_file(tmp_path: Path):
     assert "[summary]" in result.stdout
 
 
-@pytest.mark.skipif(importlib.util.find_spec("pix2tex") is None, reason="pix2tex not installed")
+@pytest.mark.skipif(importlib.util.find_spec("paddleocr") is None, reason="paddleocr not installed")
 def test_legacy_script_entry_still_works(tmp_path: Path):
     _create_board_image().save(tmp_path / "problem_0001.png")
     (tmp_path / "problems_and_answers.txt").write_text(

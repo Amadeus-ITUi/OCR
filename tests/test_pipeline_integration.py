@@ -2,8 +2,7 @@ from PIL import Image, ImageDraw
 
 from robocon_ocr.config import PipelineConfig
 from robocon_ocr.image_recognition.base import OCRResult
-from robocon_ocr.pipeline import _recognize_with_fallback_variants, run_image_pipeline, run_pipeline
-from robocon_ocr.image_recognition.preprocess import prepare_image_for_ocr
+from robocon_ocr.pipeline import run_image_pipeline, run_pipeline
 from robocon_ocr.staged_pipeline import run_dataset_pipeline_image
 
 
@@ -40,57 +39,6 @@ def test_problem_0001_is_not_empty_expression(tmp_path):
     assert target.ocr.error is None
     assert target.parsed.expression == "5+2"
     assert target.parsed.answer == 7
-
-
-def test_recognize_with_fallback_variants_uses_prepared_on_failure(tmp_path):
-    image = Image.new("RGB", (1280, 720), (30, 40, 50))
-    draw = ImageDraw.Draw(image)
-    draw.polygon([(220, 140), (1060, 140), (1060, 612), (220, 612)], fill="white")
-    draw.text((460, 320), "5+2=", fill="black")
-    preprocess = prepare_image_for_ocr(image, PipelineConfig(dataset_dir=tmp_path).preprocess)
-
-    class StubRecognizer:
-        supports_fallback_variants = True
-
-        def recognize(self, candidate_image):
-            if candidate_image.mode == "RGB":
-                return OCRResult(
-                    raw_text="\\left(\\begin{array}{c}{{bad}}\\end{array}\\right)",
-                    confidence=0.0,
-                    lines=[],
-                    error="unsupported symbol outside arithmetic charset",
-                )
-            return OCRResult(raw_text="5+2=", confidence=1.0, lines=["5+2="])
-
-    candidates = _recognize_with_fallback_variants(StubRecognizer(), preprocess)
-
-    assert candidates[0].error == "unsupported symbol outside arithmetic charset"
-    assert any(candidate.raw_text == "5+2=" for candidate in candidates[1:])
-
-
-def test_recognize_with_fallback_variants_skips_extra_passes_for_lightweight_backend(tmp_path):
-    image = Image.new("RGB", (1280, 720), (30, 40, 50))
-    draw = ImageDraw.Draw(image)
-    draw.polygon([(220, 140), (1060, 140), (1060, 612), (220, 612)], fill="white")
-    draw.text((460, 320), "5+2=", fill="black")
-    preprocess = prepare_image_for_ocr(image, PipelineConfig(dataset_dir=tmp_path).preprocess)
-
-    class StubRecognizer:
-        supports_fallback_variants = False
-
-        def __init__(self) -> None:
-            self.calls = 0
-
-        def recognize(self, _candidate_image):
-            self.calls += 1
-            return OCRResult(raw_text="5+2=", confidence=0.92, lines=["5+2="], backend="lightweight")
-
-    recognizer = StubRecognizer()
-    candidates = _recognize_with_fallback_variants(recognizer, preprocess)
-
-    assert recognizer.calls == 1
-    assert len(candidates) == 1
-    assert candidates[0].backend == "lightweight"
 
 
 def test_run_dataset_pipeline_image_stop_after_board_detection_skips_ocr(tmp_path):

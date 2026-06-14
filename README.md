@@ -171,9 +171,9 @@ python3 -m robocon_ocr camera \
   --stop-after-stage rectification
 ```
 
-## 为什么这个方案适合你现在的阶段
+## 方案优势
 
-你的题目图片有几个非常重要的优势：
+题目图片有几个重要特点：
 
 - 正对屏幕，没有透视畸变
 - 单行显示，不换行
@@ -181,43 +181,31 @@ python3 -m robocon_ocr camera \
 - 字体固定为 `Times New Roman`
 - 字符集合固定：数字、`+ - × ÷ ( ) =`
 
-所以第一阶段没必要先做复杂检测网络，可以直接：
+流水线设计：
 
 1. 先找大块高对比白色题板区域，长宽比约束为 `16:9`
 2. 如果矩形不稳定，再找 4 个角点构成的四边形题板
 3. 对 ROI 做透视拉正
 4. 在 ROI 内做 Otsu 二值化和放大
-5. 送给 `pix2tex`
+5. 送给 PaddleOCR TextRecognition
 6. 用规则层把 OCR 输出收敛为 `= ( ) 0-9 + - × ÷`
 7. 再独立计算答案
 
-这样系统会比“直接信 OCR 原始文本”稳很多。
+## 安装
 
-## 安装建议
-
-建议单独创建虚拟环境，并优先使用 `Python 3.10`、`Python 3.11` 或 `Python 3.12`。
-当前一些 OCR 相关下游依赖在 `Python 3.14` 上还不稳定，`pix2tex` 和 `PaddleOCR` 都容易在安装阶段踩坑。
-
-
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -U pip
-pip install -r requirements.txt
-```
-
-`pix2tex` 依赖 `torch`，首次运行时还可能自动下载模型权重，所以第一次启动会比后续慢一些。
-当前默认配置按 `CPU-only Linux` 规划，不需要额外安装 `tesseract` 系统命令。
-如果你使用的是 `Python 3.14`，安装时又看到 `stringzilla`、`gcc-12` 之类的编译错误，优先重新创建 `Python 3.11/3.12` 虚拟环境，而不是继续硬补编译链。
-
-如果你要试 `PaddleOCR lightweight` GPU 版，建议单独建环境，不要覆盖现有 `.venv`：
+建议使用 `Python 3.10` 创建虚拟环境：
 
 ```bash
 python3.10 -m venv .venv-paddle
 source .venv-paddle/bin/activate
 python -m pip install -U pip setuptools wheel
-python -m pip install "numpy<3" "Pillow>=10.0" "opencv-python>=4.10" paddleocr
+pip install -r requirements-paddle.txt
+```
+
+GPU 用户需额外安装对应 CUDA 版本的 PaddlePaddle：
+
+```bash
+# RTX 4060 / CUDA 12.6 示例：
 python -m pip install \
   --index-url https://pypi.org/simple \
   --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
@@ -226,34 +214,21 @@ python -m pip install \
   paddlepaddle-gpu==3.3.1
 ```
 
-当前这台 `RTX 4060` 已验证 `paddle 3.3.1 + gpu:0` 可以正常导入。
+当前 `RTX 4060` 已验证 `paddle 3.3.1 + gpu:0` 可以正常导入。
 
 ## OCR 后端与命令行
 
-当前 OCR 支持两个后端：
+当前 OCR 后端：
 
-- `pix2tex`
-  偏公式识别，准确率上限更高一些，但通常更慢。
-- `lightweight`
-  当前对应 `PaddleOCR TextRecognition` 轻量识别路径，只跑单次主输入，优先保实时速度。
-  当前默认模型是 `PP-OCRv5_server_rec`，比 `mobile_rec` 更重一些，但更适合优先换取识别稳定性。
+- `lightweight` — 基于 `PaddleOCR TextRecognition`，模型 `PP-OCRv5_server_rec`，单次识别，优先保障实时性和稳定性。
 
-命令行通过 `--ocr-backend` 切换：
+命令行通过 `--ocr-backend` 指定（当前仅 `lightweight`）：
 
 ```bash
---ocr-backend pix2tex
 --ocr-backend lightweight
 ```
 
-默认行为是：
-
-- `dataset` 模式默认 `pix2tex`
-- `camera` 模式默认 `lightweight`
-
-建议：
-
-- 跑 `pix2tex` 时使用原来的 `.venv`
-- 跑 `lightweight` 时使用 `.venv-paddle`
+`dataset` 和 `camera` 模式均默认 `lightweight`。
 
 ## 运行离线识别
 
@@ -274,14 +249,7 @@ python3 -m robocon_ocr dataset/num_100_com_8 \
 python3 -m robocon_ocr dataset/num_100_com_4
 ```
 
-强制使用 `pix2tex`：
-
-```bash
-python3 -m robocon_ocr dataset/num_100_com_4 \
-  --ocr-backend pix2tex
-```
-
-用 `PaddleOCR lightweight` 跑数据集：
+用 PaddleOCR 跑数据集：
 
 ```bash
 source .venv-paddle/bin/activate
@@ -345,15 +313,6 @@ python3 -m robocon_ocr camera \
 source .venv-paddle/bin/activate
 python3 -m robocon_ocr camera \
   --ocr-backend lightweight \
-  --show-window \
-  --show-stage-debug
-```
-
-如果你要拿实时链路和旧后端做对照：
-
-```bash
-python3 -m robocon_ocr camera \
-  --ocr-backend pix2tex \
   --show-window \
   --show-stage-debug
 ```
@@ -557,10 +516,7 @@ python3 -m robocon_ocr camera \
 
 ### 推荐调试命令
 
-先说明当前后端默认值：
-
-- `dataset` 默认 `pix2tex`
-- `camera` 默认 `lightweight`
+当前 `dataset` 和 `camera` 均默认 `lightweight`。
 
 实时看 OCR：
 
@@ -577,16 +533,6 @@ python3 -m robocon_ocr camera \
 source .venv-paddle/bin/activate
 python3 -m robocon_ocr camera \
   --ocr-backend lightweight \
-  --show-window \
-  --show-stage-debug \
-  --stop-after-stage ocr
-```
-
-实时看 OCR，并强制切回 `pix2tex`：
-
-```bash
-python3 -m robocon_ocr camera \
-  --ocr-backend pix2tex \
   --show-window \
   --show-stage-debug \
   --stop-after-stage ocr
@@ -629,51 +575,21 @@ python3 -m robocon_ocr dataset/num_100_com_8 \
 2. 统一读取 `enhancement` 输出的 `prepared_for_ocr`
 3. 把 OCR 输出接到同一套 normalize / parse 规则层
 
-两个后端目前的行为不同：
+### OCR 识别路径
 
-- `pix2tex`
-  会走主图 + fallback 候选图
-- `lightweight`
-  第一阶段只跑主图一次，不做额外 fallback
+当前 OCR 使用 PaddleOCR 的 `TextRecognition`：
 
-### `pix2tex` 路径
+- 模型：`PP-OCRv5_server_rec`
+- `device=auto` 时由 Paddle 自动决定设备
+- `.venv-paddle` 环境已验证可落到 `gpu:0`
 
-当前完整顺序是：
+完整顺序：
 
-1. 主输入图：
-   `enhancement.prepared_for_ocr`
-2. OCR 引擎：
-   `pix2tex`
-3. fallback 候选图：
-   - `expression_region.cropped_region`
-   - `invert_prepared`
-4. 文本规范化：
-   去 LaTeX 包装、统一符号、抽取最像算式的片段
-5. 表达式解析与有限修复：
-   重复运算符折叠、内部错误等号替换、括号平衡修复
-6. 选择最佳候选结果
-
-### `lightweight` 路径
-
-当前 `lightweight` 实际对应的是：
-
-- `PaddleOCR` 的 `TextRecognition`
-- 默认模型名：`PP-OCRv5_server_rec`
-- `device=auto` 时会由 Paddle 自己决定设备
-- 在你现在的 `.venv-paddle` 环境中，已经验证可落到 `gpu:0`
-
-当前完整顺序是：
-
-1. 主输入图：
-   `enhancement.prepared_for_ocr`
-2. OCR 引擎：
-   `PaddleOCR TextRecognition`
-3. 不额外跑 fallback 图
-4. 文本规范化：
-   统一 `x/* -> ×`、`/ -> ÷`、括号、空白等
-5. 字符集限制：
-   只接受 `0-9 + - × ÷ ( ) =`
-6. 表达式解析与求值
+1. 主输入图：`enhancement.prepared_for_ocr`
+2. OCR 引擎：`PaddleOCR TextRecognition`
+3. 文本规范化：统一 `x/* -> ×`、`/ -> ÷`、括号、空白等
+4. 字符集限制：只接受 `0-9 + - × ÷ ( ) =`
+5. 表达式解析与求值
 
 ### OCR 主路径
 
@@ -691,24 +607,9 @@ python3 -m robocon_ocr dataset/num_100_com_8 \
 
 那么流程就直接接受它，不再继续扩展更多候选。
 
-### `pix2tex` fallback 机制
-
-只有 `pix2tex` 后端当前会额外尝试两张 fallback 图：
-
-1. `gray`
-   也就是原始表达式 ROI 图
-2. `invert_prepared`
-   也就是把二值结果反色后再送一次 OCR
-
-这一步的目的不是“盲目多跑几遍”，而是针对几类常见情况补救：
-
-- 二值图把细笔画伤到了，原图反而更容易识别
-- 黑白极性和模型偏好不一致，反色图更稳
-- 短表达式里某些符号在不同图像版本下更容易被区分
-
 ### OCR 原始输出后会做什么
 
-不管你当前用的是 `pix2tex` 还是 `lightweight`，OCR 输出都不会直接当最终结果。
+OCR 输出不会直接当最终结果，会经过以下处理：
 
 当前会先经过 `normalize_ocr_text`，主要做这些事情：
 
@@ -766,22 +667,6 @@ OCR 候选进入规则层后，会尝试解析表达式。
 
 这一步不会做非常激进的猜测，所以如果 OCR 错得很离谱，规则层通常不会“神奇修好”。
 
-### 当前结果是怎么选的
-
-如果主图和 fallback 图都跑了，系统不会简单取第一条。
-
-当前会按下面倾向选最佳候选：
-
-1. 能成功解析的优先
-2. 置信度更高的优先
-3. 表达式更完整、更长的优先
-4. 有错误标记的候选靠后
-
-所以你在调试时要注意：
-
-- 并不是 `prepared_for_ocr` 的结果一定会成为最终结果
-- 某些帧最后可能是 `gray` 或 `invert_prepared` 胜出
-
 ### OCR 调试阶段建议重点观察什么
 
 建议优先看下面这些现象：
@@ -808,8 +693,7 @@ OCR 候选进入规则层后，会尝试解析表达式。
 ### 常见错误该先看哪里
 
 - enhancement 图已经很好，但 OCR 还经常空串：
-  先看当前后端是否和场景匹配
-  `pix2tex` 更偏公式；`lightweight` 更偏单行实时识别
+  先看 enhancement 图本身是否清晰，字符是否完整
 
 - `÷` 经常被认成别的：
   先回看 enhancement 中除号小点和中横是否真的清楚分离
