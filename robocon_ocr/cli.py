@@ -94,7 +94,7 @@ def _add_stage_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--ocr-backend",
         choices=OCR_BACKEND_CHOICES,
-        help="OCR backend override. Both dataset and camera default to lightweight.",
+        help="OCR backend override. Both dataset and camera default to onnx.",
     )
 
 
@@ -204,7 +204,7 @@ def build_config(args: argparse.Namespace) -> PipelineConfig:
         debug_dir=args.debug_dir.expanduser() if args.debug_dir else None,
         stop_after_stage=args.stop_after_stage,
         debug_save_stages=args.debug_save_stages,
-        ocr=OCRConfig(backend=args.ocr_backend or "lightweight"),
+        ocr=OCRConfig(backend=args.ocr_backend or "onnx"),
     )
 
 
@@ -214,7 +214,7 @@ def build_camera_pipeline_config(args: argparse.Namespace) -> PipelineConfig:
         debug_dir=args.debug_dir.expanduser() if args.debug_dir else None,
         stop_after_stage=args.stop_after_stage,
         debug_save_stages=args.debug_save_stages,
-        ocr=OCRConfig(backend=args.ocr_backend or "lightweight"),
+        ocr=OCRConfig(backend=args.ocr_backend or "onnx"),
     )
 
 

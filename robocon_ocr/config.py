@@ -8,7 +8,7 @@ from robocon_ocr.roi_tuning import DEFAULT_ROI_TUNING_VALUES
 
 @dataclass(slots=True)
 class OCRConfig:
-    backend: str = "lightweight"
+    backend: str = "onnx"
     device: str = "auto"
     lightweight_model_name: str = "PP-OCRv5_server_rec"
     onnx_model_path: str = "models/PP-OCRv5_server_rec.onnx"

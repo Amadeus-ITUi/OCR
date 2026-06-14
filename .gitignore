@@ -8,8 +8,7 @@ dist/
 build/
 
 # Virtual environments
-.venv/
-.venv-paddle/
+.venv*/
 venv/
 ENV/
 
@@ -27,6 +26,9 @@ ENV/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Generated test datasets
+test_dataset/
 
 # Logs
 *.log

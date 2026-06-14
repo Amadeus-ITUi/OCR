@@ -62,7 +62,7 @@ def test_build_config_auto_detects_manifest(tmp_path: Path):
     assert config.debug_dir is None
     assert config.stop_after_stage is None
     assert config.debug_save_stages is False
-    assert config.ocr.backend == "lightweight"
+    assert config.ocr.backend == "onnx"
 
 
 def test_build_config_supports_stage_stop_and_stage_debug_dir(tmp_path: Path):
@@ -88,12 +88,12 @@ def test_build_config_supports_stage_stop_and_stage_debug_dir(tmp_path: Path):
     assert config.debug_save_stages is True
 
 
-def test_build_camera_pipeline_config_defaults_to_lightweight_backend():
+def test_build_camera_pipeline_config_defaults_to_onnx_backend():
     args = build_argparser().parse_args(["camera"])
 
     config = build_camera_pipeline_config(args)
 
-    assert config.ocr.backend == "lightweight"
+    assert config.ocr.backend == "onnx"
 
 
 def test_build_config_accepts_explicit_ocr_backend_override(tmp_path: Path):
