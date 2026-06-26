@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass, field
 from functools import lru_cache
+import os
 from pathlib import Path
 import sys
 import threading
@@ -26,7 +27,26 @@ from robocon_ocr.vision_processing.board_detection import ROIDebugInfo
 from robocon_ocr.pipeline import run_pipeline
 
 STAGE_CHOICES = list(STAGE_SEQUENCE)
-OCR_BACKEND_CHOICES = ["lightweight", "onnx"]
+OCR_BACKEND_CHOICES = ["lightweight", "onnx", "api"]
+
+
+def _load_dotenv() -> None:
+    """加载项目根目录的 .env 文件（如果存在）。
+
+    仅在当前进程未设置对应变量时才覆盖，命令行参数优先级更高。
+    """
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if not env_path.is_file():
+        return
+    with env_path.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key, value = key.strip(), value.strip()
+            if key and key not in os.environ:
+                os.environ[key] = value
 
 
 @dataclass(slots=True)
@@ -689,8 +709,11 @@ def _run_async_camera(args: argparse.Namespace) -> int:
                     recognizer=recognizer,
                 )
                 last_processed_index = frame_index
+                is_pending = record.ocr.error == "pending"
                 if not record.roi_found:
                     stats.frames_skipped_no_roi += 1
+                elif is_pending:
+                    stats.frames_processed += 1
                 else:
                     stats.frames_processed += 1
                     signature = _camera_signature(record)
@@ -758,6 +781,7 @@ def _run_async_camera(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _load_dotenv()
     args_list = list(argv) if argv is not None else sys.argv[1:]
     if args_list and args_list[0] not in {"dataset", "camera", "-h", "--help"}:
         args_list = ["dataset", *args_list]

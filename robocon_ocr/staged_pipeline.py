@@ -222,17 +222,42 @@ class _OCRStage:
         self._recognizer = recognizer
 
     def run(self, context: PipelineContext) -> PipelineContext:
-        if context.expression_region is None or context.enhancement is None:
+        if context.enhancement is None:
             return context
         recognizer = self._recognizer or create_recognizer(context.ocr_config)
-        best = recognizer.recognize(context.enhancement.prepared_for_ocr.convert("RGB"))
+
+        # 联网大模型传彩色纠正图，本地模型传二值化增强图
+        if recognizer.backend_name == "api" and context.rectification is not None:
+            ocr_input = context.rectification.rectified.convert("RGB")
+            preview = context.rectification.rectified
+        else:
+            ocr_input = context.enhancement.prepared_for_ocr.convert("RGB")
+            preview = context.enhancement.prepared_for_ocr
+
+        # 非阻塞路径（联网 API）— poll 消费结果，submit 受冷却控制，不阻塞流水线
+        api_status = ""
+        if getattr(recognizer, "is_async", False):
+            result = recognizer.poll()
+            if result is not None:
+                best = result
+                api_status = "result ready"
+            else:
+                recognizer.submit(ocr_input)
+                api_status = recognizer.status
+                cached = getattr(recognizer, "_cached_result", None)
+                if cached is not None:
+                    best = cached
+                else:
+                    best = OCRResult(raw_text="", confidence=0.0, lines=[], error="pending", backend="api")
+        else:
+            best = recognizer.recognize(ocr_input)
+
         stage_result = OCRStageResult(
             candidates=[best],
             best=best,
             error=best.error,
         )
         context.ocr_stage = stage_result
-        preview = context.enhancement.prepared_for_ocr
         context.snapshots[self.name] = _snapshot(
             self.name,
             preview,
@@ -240,6 +265,7 @@ class _OCRStage:
             f"Backend: {best.backend}",
             f"Best: {best.raw_text if best else '<empty>'}",
             f"Error: {stage_result.error or 'none'}",
+            f"API: {api_status}" if api_status else "",
         )
         return context
 

@@ -15,6 +15,13 @@ class OCRConfig:
     onnx_dict_path: str = "models/dict.txt"
     warmup: bool = True
     strict_charset: bool = True
+    # --- 联网大模型 API ---
+    api_provider: str = "moonshot"
+    api_model: str = ""
+    api_key: str = ""
+    api_base_url: str = ""
+    api_timeout: float = 5.0
+    api_max_tokens: int = 128
 
 
 @dataclass(slots=True)

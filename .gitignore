@@ -33,6 +33,9 @@ test_dataset/
 # Logs
 *.log
 
+# Environment / secrets
+.env
+
 # Others
 *.swp
 *.swo

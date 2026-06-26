@@ -90,19 +90,57 @@ pip install opencv-python
 
 ## OCR 后端
 
-| 后端 | 引擎 | 依赖 | 适用场景 |
-|------|------|------|----------|
-| `onnx`（默认） | ONNX Runtime | onnxruntime | Jetson / ARM64 / 跨平台 |
-| `lightweight` | PaddleOCR TextRecognition | PaddlePaddle | x86 GPU 加速 |
+| 后端 | 引擎 | 延迟 | 依赖 | 适用场景 |
+|------|------|------|------|----------|
+| `onnx`（默认） | ONNX Runtime | ~10-50ms | onnxruntime | Jetson / ARM64 / 跨平台 |
+| `lightweight` | PaddleOCR TextRecognition | ~50-200ms | PaddlePaddle | x86 GPU 加速 |
+| `api` | 联网多模态大模型 | ~1-3s | requests | 离线识别兜底、复杂题目 |
 
 `dataset` 和 `camera` 模式均默认 `onnx`，无需 `--ocr-backend` 参数。ONNX 后端精度与 PaddleOCR 一致（200 样本 0 差异）。
 
-切换到 PaddleOCR：
+切换到其他后端：
 
 ```bash
+# PaddleOCR
 source .venv-paddle/bin/activate
 python3 -m robocon_ocr camera --ocr-backend lightweight --show-window --show-stage-debug
+
+# 联网大模型（Moonshot / OpenAI / Qwen / Gemini）
+python3 -m robocon_ocr camera --ocr-backend api --show-window --show-stage-debug
 ```
+
+### 联网大模型 API 后端
+
+适用于本地 OCR 识别失败时的兜底方案。摄像头模式下 API 调用**非阻塞**，流水线持续运行题板检测和图像纠正，OCR 结果 1-3 秒后回填，不影响实时画面流畅度。
+
+#### 配置 API 密钥
+
+编辑项目根目录 `.env` 文件：
+
+```bash
+# Moonshot（默认）
+MOONSHOT_API_KEY=sk-your-key-here
+MOONSHOT_MODEL=moonshot-v1-8k
+
+# 切换其他提供商时修改 api_provider 字段或设对应环境变量
+# 支持: moonshot / openai / qwen / gemini / custom
+```
+
+也可通过命令行参数或代码中 `OCRConfig.api_provider` 切换提供商。环境变量优先级：CLI 参数 > 环境变量 > 默认值。
+
+#### 支持的提供商
+
+| 提供商 | `api_provider` | 默认模型 | 协议 |
+|--------|---------------|----------|------|
+| Moonshot / Kimi | `moonshot` | moonshot-v1-8k | OpenAI 兼容 |
+| OpenAI | `openai` | gpt-4o-mini | OpenAI 兼容 |
+| 通义千问 VL | `qwen` | qwen-vl-max | OpenAI 兼容 |
+| Gemini | `gemini` | gemini-2.5-flash | Gemini 原生 |
+| 自定义 | `custom` | — | OpenAI 兼容 |
+
+#### 添加新提供商
+
+需要代码级修改时，只需在 [`api_recognizer.py`](robocon_ocr/image_recognition/api_recognizer.py) 的 `_PROVIDERS` 字典中追加一条记录，其余逻辑自动复用。
 
 ## 项目架构
 
@@ -110,7 +148,7 @@ python3 -m robocon_ocr camera --ocr-backend lightweight --show-window --show-sta
 robocon_ocr/
 ├── vision_capture/       # USB 摄像头采集
 ├── vision_processing/    # 题板检测、透视矫正、增强、表达式区域提取
-├── image_recognition/    # OCR 识别层（ONNX / PaddleOCR 后端）
+├── image_recognition/    # OCR 识别层（ONNX / PaddleOCR / 联网大模型 后端）
 ├── result/               # 表达式规范化、求值、结果汇总
 ├── config.py             # 可调参数（OCR、预处理、摄像头）
 ├── pipeline.py           # 单张/批量推理入口

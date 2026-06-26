@@ -12,4 +12,8 @@ def create_recognizer(config: OCRConfig):
         return LightweightMathRecognizer(config)
     if backend == "onnx":
         return OnnxMathRecognizer(config)
+    if backend == "api":
+        from robocon_ocr.image_recognition.api_recognizer import APIMathRecognizer
+
+        return APIMathRecognizer(config)
     raise ValueError(f"unsupported OCR backend: {config.backend}")
