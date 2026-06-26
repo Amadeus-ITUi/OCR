@@ -13,6 +13,7 @@ from time import strftime
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from robocon_ocr.camera_session import LatestFrameBuffer
 from robocon_ocr.camera_tuning import DEFAULT_CAMERA_TUNING
 from robocon_ocr.config import CameraConfig, OCRConfig, PipelineConfig
 from robocon_ocr.image_recognition.factory import create_recognizer
@@ -47,40 +48,6 @@ def _load_dotenv() -> None:
             key, value = key.strip(), value.strip()
             if key and key not in os.environ:
                 os.environ[key] = value
-
-
-@dataclass(slots=True)
-class LatestFrameBuffer:
-    frame_index: int = -1
-    frame_bgr: np.ndarray | None = None
-    captured_at: float = 0.0
-    stopped: bool = False
-    error: Exception | None = None
-    condition: threading.Condition = field(default_factory=threading.Condition)
-
-    def publish(self, frame_index: int, frame_bgr: np.ndarray) -> None:
-        with self.condition:
-            self.frame_index = frame_index
-            self.frame_bgr = frame_bgr.copy()
-            self.captured_at = time.monotonic()
-            self.condition.notify_all()
-
-    def stop(self, error: Exception | None = None) -> None:
-        with self.condition:
-            self.stopped = True
-            self.error = error
-            self.condition.notify_all()
-
-    def wait_for_next(self, last_processed_index: int) -> tuple[int, np.ndarray, float] | None:
-        with self.condition:
-            while True:
-                if self.error is not None:
-                    raise RuntimeError("摄像头采集线程异常退出") from self.error
-                if self.frame_bgr is not None and self.frame_index > last_processed_index:
-                    return self.frame_index, self.frame_bgr.copy(), self.captured_at
-                if self.stopped:
-                    return None
-                self.condition.wait(timeout=0.1)
 
 
 @dataclass(slots=True)
